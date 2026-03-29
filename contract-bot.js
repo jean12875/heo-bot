@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Partials, ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const client = new Client({
   intents: [
@@ -12,6 +12,8 @@ const client = new Client({
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const CONFIG = {
   TOKEN: process.env.TOKEN,
+  CLIENT_ID: process.env.CLIENT_ID,
+  GUILD_ID: process.env.GUILD_ID,
   PANEL_CHANNEL_ID: '1485191415435624594',
   STAFF_ROLE_ID: '1487848016110162153',
 
@@ -21,6 +23,7 @@ const CONFIG = {
     DEVELOPPEMENT: '1487848473448546577',
     PAIEMENT_2:    '1487848515165229336',
     TERMINE:       '1487848579488813309',
+    ANNULE:        '1487859413627834418',
   },
 
   ETAPES: [
@@ -34,11 +37,36 @@ const CONFIG = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ticketEtapes = new Map();
+// Map channelId → { nom, client, etape }
+const ticketInfos = new Map();
 
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
+  await registerSlashCommands();
 });
 
+// ─── REGISTER SLASH COMMANDS ─────────────────────────────────────────────────
+async function registerSlashCommands() {
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('contrats')
+      .setDescription('Liste tous les contrats en cours')
+      .toJSON(),
+  ];
+
+  const rest = new REST({ version: '10' }).setToken(CONFIG.TOKEN);
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(CONFIG.CLIENT_ID, CONFIG.GUILD_ID),
+      { body: commands }
+    );
+    console.log('✅ Commandes slash enregistrées');
+  } catch (err) {
+    console.error('Erreur enregistrement commandes:', err);
+  }
+}
+
+// ─── SETUP ───────────────────────────────────────────────────────────────────
 if (process.argv[2] === 'setup') {
   client.once('ready', async () => {
     const channel = await client.channels.fetch(CONFIG.PANEL_CHANNEL_ID);
@@ -66,8 +94,41 @@ if (process.argv[2] === 'setup') {
   });
 }
 
+// ─── INTERACTIONS ─────────────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
 
+  // ── Commande /contrats ──────────────────────────────────────────────────────
+  if (interaction.isChatInputCommand() && interaction.commandName === 'contrats') {
+    await interaction.deferReply({ ephemeral: false });
+
+    const guild = interaction.guild;
+    const tickets = [];
+
+    for (const [channelId, info] of ticketInfos.entries()) {
+      const channel = guild.channels.cache.get(channelId);
+      if (!channel) continue;
+      const etapeIndex = ticketEtapes.get(channelId) ?? 0;
+      const etape = CONFIG.ETAPES[etapeIndex];
+      tickets.push(`${etape.label} — **${info.nom}** — <@${info.clientId}> — ${channel}`);
+    }
+
+    if (tickets.length === 0) {
+      await interaction.editReply({ content: '📭 Aucun contrat en cours.' });
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle('📋 Contrats en cours — HEO Studio')
+      .setColor(0x5865F2)
+      .setDescription(tickets.join('\n'))
+      .setFooter({ text: `${tickets.length} contrat(s) actif(s)` })
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+    return;
+  }
+
+  // ── Bouton "Créer un contrat" ───────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'creer_contrat') {
     const modal = new ModalBuilder()
       .setCustomId('modal_contrat')
@@ -112,6 +173,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // ── Soumission du modal ─────────────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId === 'modal_contrat') {
     await interaction.deferReply({ ephemeral: true });
 
@@ -139,22 +201,14 @@ client.on('interactionCreate', async (interaction) => {
       type: ChannelType.GuildText,
       parent: CONFIG.CATEGORIES.NEGOCIATION,
       permissionOverwrites: [
-        {
-          id: guild.roles.everyone,
-          deny: [PermissionFlagsBits.ViewChannel],
-        },
-        {
-          id: user.id,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-        },
-        {
-          id: CONFIG.STAFF_ROLE_ID,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels],
-        },
+        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
       ],
     });
 
     ticketEtapes.set(ticketChannel.id, 0);
+    ticketInfos.set(ticketChannel.id, { nom: nomProjet, clientId: user.id });
 
     const embed = buildEmbed(nomProjet, description, budget, delai, user, 0);
     const row   = buildStaffRow(0);
@@ -169,6 +223,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // ── Bouton "Étape suivante" ─────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'etape_suivante') {
     const member = interaction.member;
     if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -187,9 +242,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    const nouvelleCatId = CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id];
-    await channel.setParent(nouvelleCatId, { lockPermissions: false });
-
+    await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id], { lockPermissions: false });
     ticketEtapes.set(channel.id, nouvelleEtape);
 
     const originalMessage = interaction.message;
@@ -199,8 +252,7 @@ client.on('interactionCreate', async (interaction) => {
       .setColor(CONFIG.ETAPES[nouvelleEtape].color)
       .setFooter({ text: `HEO Studio • Étape : ${CONFIG.ETAPES[nouvelleEtape].label}` });
 
-    const newRow = buildStaffRow(nouvelleEtape);
-    await originalMessage.edit({ embeds: [updatedEmbed], components: [newRow] });
+    await originalMessage.edit({ embeds: [updatedEmbed], components: [buildStaffRow(nouvelleEtape)] });
 
     await channel.send({
       embeds: [
@@ -212,7 +264,58 @@ client.on('interactionCreate', async (interaction) => {
 
     return;
   }
+
+  // ── Bouton "Annuler le contrat" ─────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'annuler_contrat') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true });
+      return;
+    }
+
+    await interaction.deferUpdate();
+
+    const channel = interaction.channel;
+    await channel.setParent(CONFIG.CATEGORIES.ANNULE, { lockPermissions: false });
+    ticketEtapes.set(channel.id, -1);
+    ticketInfos.delete(channel.id);
+
+    const originalMessage = interaction.message;
+    const ancienEmbed = originalMessage.embeds[0];
+
+    const updatedEmbed = EmbedBuilder.from(ancienEmbed)
+      .setColor(0xED4245)
+      .setFooter({ text: 'HEO Studio • ❌ Contrat annulé' });
+
+    // Désactive tous les boutons
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('etape_suivante')
+        .setLabel('Contrat annulé')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId('annuler_contrat')
+        .setLabel('Annulé')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+    );
+
+    await originalMessage.edit({ embeds: [updatedEmbed], components: [disabledRow] });
+
+    await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xED4245)
+          .setDescription(`❌ Contrat **annulé** par <@${interaction.user.id}>`)
+      ]
+    });
+
+    return;
+  }
 });
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function buildEmbed(nom, description, budget, delai, user, etapeIndex) {
   const etape = CONFIG.ETAPES[etapeIndex];
@@ -236,7 +339,11 @@ function buildStaffRow(etapeIndex) {
       .setCustomId('etape_suivante')
       .setLabel(isLast ? '✅ Terminé' : `➡️ Passer à : ${CONFIG.ETAPES[etapeIndex + 1]?.label ?? 'Fin'}`)
       .setStyle(isLast ? ButtonStyle.Success : ButtonStyle.Primary)
-      .setDisabled(isLast)
+      .setDisabled(isLast),
+    new ButtonBuilder()
+      .setCustomId('annuler_contrat')
+      .setLabel('🚫 Annuler le contrat')
+      .setStyle(ButtonStyle.Danger),
   );
 }
 
