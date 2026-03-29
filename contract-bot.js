@@ -265,6 +265,48 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // ── Bouton "Supprimer le ticket" ───────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'supprimer_ticket') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true });
+      return;
+    }
+
+    const confirmRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('confirmer_suppression')
+        .setLabel('✅ Oui, supprimer')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId('annuler_suppression')
+        .setLabel('❌ Annuler')
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.reply({
+      content: '⚠️ Tu es sûr de vouloir **supprimer définitivement** ce ticket ? Cette action est irréversible.',
+      components: [confirmRow],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // ── Confirmation suppression ────────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'confirmer_suppression') {
+    const channel = interaction.channel;
+    ticketEtapes.delete(channel.id);
+    ticketInfos.delete(channel.id);
+    await interaction.reply({ content: '🗑️ Suppression en cours...', ephemeral: true });
+    setTimeout(() => channel.delete().catch(() => {}), 2000);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === 'annuler_suppression') {
+    await interaction.reply({ content: '✅ Suppression annulée.', ephemeral: true });
+    return;
+  }
+
   // ── Bouton "Annuler le contrat" ─────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'annuler_contrat') {
     const member = interaction.member;
@@ -342,8 +384,12 @@ function buildStaffRow(etapeIndex) {
       .setDisabled(isLast),
     new ButtonBuilder()
       .setCustomId('annuler_contrat')
-      .setLabel('🚫 Annuler le contrat')
+      .setLabel('🚫 Annuler')
       .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId('supprimer_ticket')
+      .setLabel('🗑️ Supprimer')
+      .setStyle(ButtonStyle.Secondary),
   );
 }
 
