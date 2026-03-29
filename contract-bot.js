@@ -223,6 +223,48 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // ── Bouton "Étape précédente" ───────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'etape_precedente') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true });
+      return;
+    }
+
+    await interaction.deferUpdate();
+
+    const channel       = interaction.channel;
+    const etapeActuelle = ticketEtapes.get(channel.id) ?? 0;
+    const etapePrecedente = etapeActuelle - 1;
+
+    if (etapePrecedente < 0) {
+      await interaction.followUp({ content: '⚠️ Déjà à la première étape.', ephemeral: true });
+      return;
+    }
+
+    await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[etapePrecedente].id], { lockPermissions: false });
+    ticketEtapes.set(channel.id, etapePrecedente);
+
+    const originalMessage = interaction.message;
+    const ancienEmbed = originalMessage.embeds[0];
+
+    const updatedEmbed = EmbedBuilder.from(ancienEmbed)
+      .setColor(CONFIG.ETAPES[etapePrecedente].color)
+      .setFooter({ text: `HEO Studio • Étape : ${CONFIG.ETAPES[etapePrecedente].label}` });
+
+    await originalMessage.edit({ embeds: [updatedEmbed], components: [buildStaffRow(etapePrecedente)] });
+
+    await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(CONFIG.ETAPES[etapePrecedente].color)
+          .setDescription(`◀️ Ticket revenu à l'étape : **${CONFIG.ETAPES[etapePrecedente].label}**\nPar : <@${interaction.user.id}>`)
+      ]
+    });
+
+    return;
+  }
+
   // ── Bouton "Étape suivante" ─────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'etape_suivante') {
     const member = interaction.member;
@@ -375,8 +417,14 @@ function buildEmbed(nom, description, budget, delai, user, etapeIndex) {
 }
 
 function buildStaffRow(etapeIndex) {
-  const isLast = etapeIndex >= CONFIG.ETAPES.length - 1;
+  const isLast  = etapeIndex >= CONFIG.ETAPES.length - 1;
+  const isFirst = etapeIndex <= 0;
   return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('etape_precedente')
+      .setLabel('◀️')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(isFirst),
     new ButtonBuilder()
       .setCustomId('etape_suivante')
       .setLabel(isLast ? '✅ Terminé' : `➡️ Passer à : ${CONFIG.ETAPES[etapeIndex + 1]?.label ?? 'Fin'}`)
