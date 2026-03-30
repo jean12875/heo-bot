@@ -1,28 +1,38 @@
 const {
   Client, GatewayIntentBits, Partials, ChannelType, PermissionFlagsBits,
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder,
-  TextInputBuilder, TextInputStyle, REST, Routes, SlashCommandBuilder,
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  ModalBuilder, TextInputBuilder, TextInputStyle,
+  REST, Routes, SlashCommandBuilder,
   StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
 } = require('discord.js');
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+  ],
   partials: [Partials.Channel],
 });
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const CONFIG = {
-  TOKEN: process.env.TOKEN,
-  CLIENT_ID: process.env.CLIENT_ID,
-  GUILD_ID: process.env.GUILD_ID,
-  PANEL_CHANNEL_ID: '1485191415435624594',
+  TOKEN:                    process.env.TOKEN,
+  CLIENT_ID:                process.env.CLIENT_ID,
+  GUILD_ID:                 process.env.GUILD_ID,
+  PANEL_CHANNEL_ID:         '1485191415435624594',
   SUPPORT_PANEL_CHANNEL_ID: '1487752758294614076',
-  STAFF_ROLE_ID: '1487848016110162153',
+  STAFF_ROLE_ID:            '1487848016110162153',
 
+  // Rôle global dev (accès négo)
+  DEV_ROLE_ID:              '1485191413829337299',
+
+  // Rôles par type
   DEV_ROLES: {
     builder:   '1488194780809789511',
-    scripteur: '1488194696831307776',
     ui:        '1488194616413913088',
+    scripteur: '1488194696831307776',
   },
 
   CATEGORIES: {
@@ -49,12 +59,14 @@ const CONFIG = {
     report:     { label: '🚨 Report',     color: 0xED4245 },
   },
 };
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
 
-const ticketEtapes = new Map(); // channelId → étape index
-const ticketInfos  = new Map(); // channelId → { nom, clientId, devsAssignes, devsBack }
-// État temporaire de l'assignation en cours (entre Q1 et Q2)
-const assignState  = new Map(); // channelId → { typesChoisis: [], messageId }
+// ─── STATE ────────────────────────────────────────────────────────────────────
+const ticketEtapes        = new Map(); // channelId → etapeIndex
+const ticketInfos         = new Map(); // channelId → { nom, clientId }
+const ticketDevAssignment = new Map(); // channelId → { types[], assignes[userId], backup[userId] }
+const pendingDevForm      = new Map(); // channelId → { types[], formMessageId }
+// ──────────────────────────────────────────────────────────────────────────────
 
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
@@ -64,13 +76,18 @@ client.once('ready', async () => {
 // ─── SLASH COMMANDS ───────────────────────────────────────────────────────────
 async function registerSlashCommands() {
   const commands = [
-    new SlashCommandBuilder().setName('contrats').setDescription('Liste tous les contrats en cours').toJSON(),
+    new SlashCommandBuilder()
+      .setName('contrats')
+      .setDescription('Liste tous les contrats en cours')
+      .toJSON(),
   ];
   const rest = new REST({ version: '10' }).setToken(CONFIG.TOKEN);
   try {
     await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, CONFIG.GUILD_ID), { body: commands });
     console.log('✅ Commandes slash enregistrées');
-  } catch (err) { console.error('Erreur commandes:', err); }
+  } catch (err) {
+    console.error('Erreur commandes:', err);
+  }
 }
 
 // ─── SETUP ────────────────────────────────────────────────────────────────────
@@ -78,19 +95,32 @@ if (process.argv[2] === 'setup') {
   client.once('ready', async () => {
     const contractChannel = await client.channels.fetch(CONFIG.PANEL_CHANNEL_ID);
     await contractChannel.send({
-      embeds: [new EmbedBuilder().setTitle('📋 HEO Studio — Créer un contrat').setDescription('Bienvenue sur le système de contrats **HEO Studio**.\n\nClique sur le bouton ci-dessous pour ouvrir une demande de contrat.\nUn salon privé sera créé pour toi et notre équipe.').setColor(0x5865F2).setFooter({ text: 'HEO Studio • Système de contrats' })],
-      components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('creer_contrat').setLabel('📝 Créer un contrat').setStyle(ButtonStyle.Primary))],
+      embeds: [new EmbedBuilder()
+        .setTitle('📋 HEO Studio — Créer un contrat')
+        .setDescription('Bienvenue sur le système de contrats **HEO Studio**.\n\nClique sur le bouton ci-dessous pour ouvrir une demande de contrat.\nUn salon privé sera créé pour toi et notre équipe.')
+        .setColor(0x5865F2)
+        .setFooter({ text: 'HEO Studio • Système de contrats' })],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('creer_contrat').setLabel('📝 Créer un contrat').setStyle(ButtonStyle.Primary)
+      )],
     });
 
     const supportChannel = await client.channels.fetch(CONFIG.SUPPORT_PANEL_CHANNEL_ID);
     await supportChannel.send({
-      embeds: [new EmbedBuilder().setTitle('🎫 HEO Studio — Support').setDescription('Sélectionne le type de ticket dans le menu ci-dessous.\nUn salon privé sera créé pour toi et notre équipe.').setColor(0x5865F2).setFooter({ text: 'HEO Studio • Support' })],
+      embeds: [new EmbedBuilder()
+        .setTitle('🎫 HEO Studio — Support')
+        .setDescription('Sélectionne le type de ticket dans le menu ci-dessous.\nUn salon privé sera créé pour toi et notre équipe.')
+        .setColor(0x5865F2)
+        .setFooter({ text: 'HEO Studio • Support' })],
       components: [new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder().setCustomId('select_support').setPlaceholder('Choisis le type de ticket...').addOptions(
-          new StringSelectMenuOptionBuilder().setLabel('❓ Question').setDescription('Tu as une question pour l\'équipe').setValue('question'),
-          new StringSelectMenuOptionBuilder().setLabel('💡 Suggestion').setDescription('Tu as une idée à soumettre').setValue('suggestion'),
-          new StringSelectMenuOptionBuilder().setLabel('🚨 Report').setDescription('Signaler un problème ou un joueur').setValue('report'),
-        )
+        new StringSelectMenuBuilder()
+          .setCustomId('select_support')
+          .setPlaceholder('Choisis le type de ticket...')
+          .addOptions(
+            new StringSelectMenuOptionBuilder().setLabel('❓ Question').setDescription('Tu as une question pour l\'équipe').setValue('question'),
+            new StringSelectMenuOptionBuilder().setLabel('💡 Suggestion').setDescription('Tu as une idée à soumettre').setValue('suggestion'),
+            new StringSelectMenuOptionBuilder().setLabel('🚨 Report').setDescription('Signaler un problème ou un joueur').setValue('report'),
+          )
       )],
     });
 
@@ -101,9 +131,7 @@ if (process.argv[2] === 'setup') {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-function starsFor(n) { return '⭐'.repeat(n) + '☆'.repeat(5 - n); }
-
-function buildEmbed(nom, description, budget, delai, user, etapeIndex, devsAssignes = [], devsBack = []) {
+function buildEmbed(nom, description, budget, delai, user, etapeIndex, devAssignment = null) {
   const etape = CONFIG.ETAPES[etapeIndex];
   const embed = new EmbedBuilder()
     .setTitle(`📋 Contrat — ${nom}`)
@@ -112,18 +140,44 @@ function buildEmbed(nom, description, budget, delai, user, etapeIndex, devsAssig
       { name: '👤 Client',      value: `<@${user.id}>`, inline: true },
       { name: '💰 Budget',      value: budget,           inline: true },
       { name: '⏱️ Délai',       value: delai,            inline: true },
-      { name: '📝 Description', value: description,      inline: false },
+      { name: '📝 Description', value: description,       inline: false },
     )
     .setFooter({ text: `HEO Studio • Étape : ${etape.label}` })
     .setTimestamp();
 
-  if (devsAssignes.length > 0) {
-    embed.addFields({ name: '⚙️ Devs assignés', value: devsAssignes.map(d => `> ⚙️ <@${d.id}> — ${d.type}`).join('\n'), inline: false });
+  if (devAssignment) {
+    const typesLabel = devAssignment.types.map(t => {
+      const icons = { builder: '🏗️ Builder', scripteur: '💻 Scripteur', ui: '🎨 UI' };
+      return icons[t] ?? t;
+    }).join(', ');
+
+    const assignesStr = devAssignment.assignes.length > 0
+      ? devAssignment.assignes.map(id => `🔨 <@${id}>`).join(', ')
+      : '*Aucun*';
+
+    const backupStr = devAssignment.backup.length > 0
+      ? devAssignment.backup.map(id => `<@${id}>`).join(', ')
+      : '*Aucun*';
+
+    embed.addFields(
+      { name: '🗂️ Types retenus',  value: typesLabel,   inline: false },
+      { name: '🔨 Devs assignés',  value: assignesStr,  inline: true  },
+      { name: '🔧 Support/Backup', value: backupStr,    inline: true  },
+    );
   }
-  if (devsBack.length > 0) {
-    embed.addFields({ name: '👥 Devs', value: devsBack.map(d => `> <@${d.id}> — ${d.type}`).join('\n'), inline: false });
-  }
+
   return embed;
+}
+
+// Vérifie si un membre peut avancer les étapes (staff ou dev assigné si etape >= 1)
+function canAdvanceEtape(member, channelId, etapeActuelle) {
+  const isStaff = member.roles.cache.has(CONFIG.STAFF_ROLE_ID) || member.permissions.has(PermissionFlagsBits.Administrator);
+  if (isStaff) return true;
+  if (etapeActuelle >= 1) {
+    const assignment = ticketDevAssignment.get(channelId);
+    if (assignment && assignment.assignes.includes(member.id)) return true;
+  }
+  return false;
 }
 
 function buildStaffRow(etapeIndex) {
@@ -131,7 +185,7 @@ function buildStaffRow(etapeIndex) {
   const isFirst = etapeIndex <= 0;
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('etape_precedente').setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(isFirst),
-    new ButtonBuilder().setCustomId('etape_suivante').setLabel(isLast ? '✅ Terminé' : `➡️ Passer à : ${CONFIG.ETAPES[etapeIndex + 1]?.label}`).setStyle(isLast ? ButtonStyle.Success : ButtonStyle.Primary).setDisabled(isLast),
+    new ButtonBuilder().setCustomId('etape_suivante').setLabel(isLast ? '✅ Terminé' : `➡️ Passer à : ${CONFIG.ETAPES[etapeIndex + 1]?.label ?? 'Fin'}`).setStyle(isLast ? ButtonStyle.Success : ButtonStyle.Primary).setDisabled(isLast),
     new ButtonBuilder().setCustomId('annuler_contrat').setLabel('🚫 Annuler').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('supprimer_ticket').setLabel('🗑️ Supprimer').setStyle(ButtonStyle.Secondary),
   );
@@ -144,10 +198,44 @@ function buildSupportRow(ferme) {
   );
 }
 
-// Récupère les membres ayant un rôle donné
-async function getMembersWithRole(guild, roleId) {
-  await guild.members.fetch();
-  return guild.members.cache.filter(m => m.roles.cache.has(roleId)).map(m => ({ id: m.id, username: m.user.username }));
+// Envoie le message de l'étape 1 du formulaire (choix des types)
+async function sendFormEtape1(channel, selectedTypes = []) {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId('dev_form_types')
+    .setPlaceholder('Sélectionne le(s) type(s) de dev retenus...')
+    .setMinValues(1)
+    .setMaxValues(3)
+    .addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('🏗️ Builder')
+        .setDescription('Constructeur de maps / structures')
+        .setValue('builder')
+        .setDefault(selectedTypes.includes('builder')),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('💻 Scripteur')
+        .setDescription('Développeur de scripts / systèmes')
+        .setValue('scripteur')
+        .setDefault(selectedTypes.includes('scripteur')),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('🎨 UI')
+        .setDescription('Designer d\'interfaces')
+        .setValue('ui')
+        .setDefault(selectedTypes.includes('ui')),
+    );
+
+  const row1 = new ActionRowBuilder().addComponents(select);
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('dev_form_annuler').setLabel('❌ Annuler').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('dev_form_etape2').setLabel('➡️ Étape suivante').setStyle(ButtonStyle.Primary),
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle('👥 Assignation des devs — Étape 1/2')
+    .setDescription('Sélectionne le ou les **types de dev** retenus pour ce projet.\nTous les devs de ce type seront notifiés comme support/backup.')
+    .setColor(0x5865F2)
+    .setFooter({ text: selectedTypes.length > 0 ? `Types sélectionnés : ${selectedTypes.join(', ')}` : 'Aucun type sélectionné' });
+
+  return await channel.send({ embeds: [embed], components: [row1, row2] });
 }
 
 // ─── INTERACTIONS ─────────────────────────────────────────────────────────────
@@ -155,70 +243,110 @@ client.on('interactionCreate', async (interaction) => {
 
   // ── /contrats ────────────────────────────────────────────────────────────────
   if (interaction.isChatInputCommand() && interaction.commandName === 'contrats') {
-    await interaction.deferReply();
+    await interaction.deferReply({ ephemeral: false });
+    const guild = interaction.guild;
     const tickets = [];
     for (const [channelId, info] of ticketInfos.entries()) {
-      const ch = interaction.guild.channels.cache.get(channelId);
-      if (!ch) continue;
-      const etape = CONFIG.ETAPES[ticketEtapes.get(channelId) ?? 0];
-      tickets.push(`${etape.label} — **${info.nom}** — <@${info.clientId}> — ${ch}`);
+      const channel = guild.channels.cache.get(channelId);
+      if (!channel) continue;
+      const etapeIndex = ticketEtapes.get(channelId) ?? 0;
+      const etape = CONFIG.ETAPES[etapeIndex];
+      tickets.push(`${etape.label} — **${info.nom}** — <@${info.clientId}> — ${channel}`);
     }
-    if (!tickets.length) { await interaction.editReply({ content: '📭 Aucun contrat en cours.' }); return; }
-    await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('📋 Contrats en cours — HEO Studio').setColor(0x5865F2).setDescription(tickets.join('\n')).setFooter({ text: `${tickets.length} contrat(s) actif(s)` }).setTimestamp()] });
+    if (tickets.length === 0) {
+      await interaction.editReply({ content: '📭 Aucun contrat en cours.' });
+      return;
+    }
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
+        .setTitle('📋 Contrats en cours — HEO Studio')
+        .setColor(0x5865F2)
+        .setDescription(tickets.join('\n'))
+        .setFooter({ text: `${tickets.length} contrat(s) actif(s)` })
+        .setTimestamp()],
+    });
     return;
   }
 
-  // ── Select support ───────────────────────────────────────────────────────────
+  // ── Sélecteur support ─────────────────────────────────────────────────────────
   if (interaction.isStringSelectMenu() && interaction.customId === 'select_support') {
     const type = interaction.values[0];
     const modals = {
-      question:   { title: '❓ Poser une question',   fields: [{ id: 'sujet', label: 'Sujet', short: true, ph: 'Ex: Délais, paiements...' }, { id: 'message', label: 'Ta question', short: false, ph: 'Décris ta question...' }] },
-      suggestion: { title: '💡 Faire une suggestion', fields: [{ id: 'sujet', label: 'Titre', short: true, ph: 'Ex: Ajouter une fonctionnalité...' }, { id: 'message', label: 'Description', short: false, ph: 'Décris ta suggestion...' }] },
-      report:     { title: '🚨 Signaler un problème', fields: [{ id: 'sujet', label: 'Qui ou quoi ?', short: true, ph: 'Ex: Pseudo, bug...' }, { id: 'message', label: 'Description + preuves', short: false, ph: 'Décris le problème...' }] },
+      question:   { title: '❓ Poser une question',    fields: [
+        { id: 'sujet',   label: 'Sujet',       short: true,  placeholder: 'Ex: Délais, paiements...' },
+        { id: 'message', label: 'Ta question',  short: false, placeholder: 'Décris ta question en détail...' },
+      ]},
+      suggestion: { title: '💡 Faire une suggestion',  fields: [
+        { id: 'sujet',   label: 'Titre de la suggestion', short: true,  placeholder: 'Ex: Ajouter une fonctionnalité...' },
+        { id: 'message', label: 'Description',           short: false, placeholder: 'Décris ta suggestion en détail...' },
+      ]},
+      report:     { title: '🚨 Signaler un problème',  fields: [
+        { id: 'sujet',   label: 'Qui ou quoi signaler ?',      short: true,  placeholder: 'Ex: Pseudo du joueur, bug...' },
+        { id: 'message', label: 'Description + preuves',       short: false, placeholder: 'Décris le problème, ajoute des preuves si possible...' },
+      ]},
     };
-    const def = modals[type];
-    const modal = new ModalBuilder().setCustomId(`modal_support_${type}`).setTitle(def.title);
-    for (const f of def.fields) modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(f.id).setLabel(f.label).setStyle(f.short ? TextInputStyle.Short : TextInputStyle.Paragraph).setPlaceholder(f.ph).setRequired(true)));
+    const modalDef = modals[type];
+    const modal = new ModalBuilder().setCustomId(`modal_support_${type}`).setTitle(modalDef.title);
+    for (const f of modalDef.fields) {
+      modal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId(f.id).setLabel(f.label)
+          .setStyle(f.short ? TextInputStyle.Short : TextInputStyle.Paragraph)
+          .setPlaceholder(f.placeholder).setRequired(true)
+      ));
+    }
     await interaction.showModal(modal);
     return;
   }
 
-  // ── Modal support ────────────────────────────────────────────────────────────
+  // ── Modal support soumis ──────────────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_support_')) {
     await interaction.deferReply({ ephemeral: true });
-    const type = interaction.customId.replace('modal_support_', '');
-    const sujet = interaction.fields.getTextInputValue('sujet');
-    const message = interaction.fields.getTextInputValue('message');
-    const user = interaction.user;
-    const guild = interaction.guild;
+    const type     = interaction.customId.replace('modal_support_', '');
+    const sujet    = interaction.fields.getTextInputValue('sujet');
+    const message  = interaction.fields.getTextInputValue('message');
+    const user     = interaction.user;
+    const guild    = interaction.guild;
     const typeInfo = CONFIG.SUPPORT_TYPES[type];
-    const ch = await guild.channels.create({
+
+    const ticketChannel = await guild.channels.create({
       name: `${type}-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}`,
       type: ChannelType.GuildText,
       parent: CONFIG.CATEGORIES.SUPPORT,
       permissionOverwrites: [
-        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
-        { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: CONFIG.STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        { id: guild.roles.everyone,   deny: [PermissionFlagsBits.ViewChannel] },
+        { id: user.id,                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.STAFF_ROLE_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
       ],
     });
-    await ch.send({
+
+    await ticketChannel.send({
       content: `👋 <@${user.id}> | <@&${CONFIG.STAFF_ROLE_ID}>`,
-      embeds: [new EmbedBuilder().setTitle(`${typeInfo.label} — ${sujet}`).setColor(typeInfo.color).addFields({ name: '👤 Membre', value: `<@${user.id}>`, inline: true }, { name: '📝 Message', value: message }).setFooter({ text: 'HEO Studio • Support' }).setTimestamp()],
+      embeds: [new EmbedBuilder()
+        .setTitle(`${typeInfo.label} — ${sujet}`)
+        .setColor(typeInfo.color)
+        .addFields(
+          { name: '👤 Membre',   value: `<@${user.id}>`, inline: true },
+          { name: '📝 Message',  value: message,          inline: false },
+        )
+        .setFooter({ text: 'HEO Studio • Support' })
+        .setTimestamp()],
       components: [buildSupportRow(false)],
     });
-    await interaction.editReply({ content: `✅ Ton ticket a été créé : ${ch}` });
+
+    await interaction.editReply({ content: `✅ Ton ticket a été créé : ${ticketChannel}` });
     return;
   }
 
-  // ── Bouton fermer support ────────────────────────────────────────────────────
+  // ── Fermer ticket support ─────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'fermer_support') {
     const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
     await interaction.deferUpdate();
     const channel = interaction.channel;
-    for (const [id, ow] of channel.permissionOverwrites.cache) {
-      if (id !== channel.guild.roles.everyone.id && id !== CONFIG.STAFF_ROLE_ID) {
+    for (const [id] of channel.permissionOverwrites.cache) {
+      if (id !== interaction.guild.roles.everyone.id && id !== CONFIG.STAFF_ROLE_ID) {
         await channel.permissionOverwrites.edit(id, { ViewChannel: false, SendMessages: false });
       }
     }
@@ -227,44 +355,61 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // ── Bouton supprimer support ─────────────────────────────────────────────────
+  // ── Supprimer ticket support ──────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'supprimer_support') {
     const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
-    await interaction.reply({ content: '⚠️ Supprimer définitivement ?', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirmer_suppression_support').setLabel('✅ Oui').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('annuler_suppression_support').setLabel('❌ Annuler').setStyle(ButtonStyle.Secondary))], ephemeral: true });
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
+    await interaction.reply({
+      content: '⚠️ Tu es sûr de vouloir **supprimer définitivement** ce ticket ?',
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('confirmer_suppression_support').setLabel('✅ Oui, supprimer').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('annuler_suppression_support').setLabel('❌ Annuler').setStyle(ButtonStyle.Secondary),
+      )],
+      ephemeral: true,
+    });
     return;
   }
-  if (interaction.isButton() && interaction.customId === 'confirmer_suppression_support') {
-    await interaction.reply({ content: '🗑️ Suppression...', ephemeral: true });
-    setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
-    return;
-  }
-  if (interaction.isButton() && interaction.customId === 'annuler_suppression_support') { await interaction.reply({ content: '✅ Annulé.', ephemeral: true }); return; }
 
-  // ── Bouton créer contrat ─────────────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'confirmer_suppression_support') {
+    const channel = interaction.channel;
+    await interaction.reply({ content: '🗑️ Suppression en cours...', ephemeral: true });
+    setTimeout(() => channel.delete().catch(() => {}), 2000);
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === 'annuler_suppression_support') {
+    await interaction.reply({ content: '✅ Suppression annulée.', ephemeral: true }); return;
+  }
+
+  // ── Créer un contrat ──────────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'creer_contrat') {
     const modal = new ModalBuilder().setCustomId('modal_contrat').setTitle('Nouvelle demande de contrat');
     modal.addComponents(
-      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nom_projet').setLabel('Nom du projet').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Jeu Roblox RPG...').setRequired(true)),
-      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('description').setLabel('Description du projet').setStyle(TextInputStyle.Paragraph).setPlaceholder('Décris ce que tu veux réaliser...').setRequired(true)),
-      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('budget').setLabel('Budget estimé (Robux ou €)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 5000 Robux, 50€...').setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nom_projet').setLabel('Nom du projet').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Jeu Roblox RPG, Site vitrine...').setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('description').setLabel('Description du projet').setStyle(TextInputStyle.Paragraph).setPlaceholder('Décris ce que tu veux qu\'on réalise...').setRequired(true)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('budget').setLabel('Budget estimé (en Robux ou €)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 5000 Robux, 50€...').setRequired(true)),
       new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delai').setLabel('Délai souhaité').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 2 semaines, 1 mois...').setRequired(false)),
     );
     await interaction.showModal(modal);
     return;
   }
 
-  // ── Modal contrat ────────────────────────────────────────────────────────────
+  // ── Modal contrat soumis ──────────────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId === 'modal_contrat') {
     await interaction.deferReply({ ephemeral: true });
     const nomProjet   = interaction.fields.getTextInputValue('nom_projet');
     const description = interaction.fields.getTextInputValue('description');
     const budget      = interaction.fields.getTextInputValue('budget');
     const delai       = interaction.fields.getTextInputValue('delai') || 'Non précisé';
-    const guild = interaction.guild;
-    const user  = interaction.user;
+    const guild       = interaction.guild;
+    const user        = interaction.user;
 
-    const existing = guild.channels.cache.find(c => c.name === `contrat-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}` && c.type === ChannelType.GuildText);
+    const existing = guild.channels.cache.find(c =>
+      c.name === `contrat-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}` &&
+      c.type === ChannelType.GuildText
+    );
     if (existing) { await interaction.editReply({ content: `❌ Tu as déjà un ticket ouvert : ${existing}` }); return; }
 
     const ticketChannel = await guild.channels.create({
@@ -272,14 +417,16 @@ client.on('interactionCreate', async (interaction) => {
       type: ChannelType.GuildText,
       parent: CONFIG.CATEGORIES.NEGOCIATION,
       permissionOverwrites: [
-        { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
-        { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: CONFIG.STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
+        { id: user.id,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.STAFF_ROLE_ID,  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        // Tous les devs voient la négociation (lecture seule)
+        { id: CONFIG.DEV_ROLE_ID,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
       ],
     });
 
     ticketEtapes.set(ticketChannel.id, 0);
-    ticketInfos.set(ticketChannel.id, { nom: nomProjet, description, budget, delai, clientId: user.id, devsAssignes: [], devsBack: [] });
+    ticketInfos.set(ticketChannel.id, { nom: nomProjet, description, budget, delai, clientId: user.id });
 
     await ticketChannel.send({
       content: `👋 <@${user.id}> | <@&${CONFIG.STAFF_ROLE_ID}>`,
@@ -291,210 +438,274 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // ── Étape suivante ────────────────────────────────────────────────────────────
-  if (interaction.isButton() && interaction.customId === 'etape_suivante') {
-    const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
-
-    const channel = interaction.channel;
-    const etapeActuelle = ticketEtapes.get(channel.id) ?? 0;
-    const nouvelleEtape = etapeActuelle + 1;
-    if (nouvelleEtape >= CONFIG.ETAPES.length) { await interaction.reply({ content: '✅ Déjà à l\'étape finale.', ephemeral: true }); return; }
-
-    // ── Transition spéciale : Négociation → 1er paiement (étape 0 → 1) ────────
-    if (etapeActuelle === 0) {
-      await interaction.deferUpdate();
-
-      // Q1 : Sélection des types de dev
-      const q1Row = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId('assign_types')
-          .setPlaceholder('Sélectionne les types de dev...')
-          .setMinValues(1).setMaxValues(3)
-          .addOptions(
-            new StringSelectMenuOptionBuilder().setLabel('🔨 Builder').setValue('builder'),
-            new StringSelectMenuOptionBuilder().setLabel('💻 Scripteur').setValue('scripteur'),
-            new StringSelectMenuOptionBuilder().setLabel('🎨 UI').setValue('ui'),
-          )
-      );
-
-      const msg = await channel.send({
-        embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('📋 Assignation des devs — Étape 1/2').setDescription('Sélectionne les **types de dev** retenus pour ce projet :')],
-        components: [q1Row],
-      });
-
-      assignState.set(channel.id, { typesChoisis: [], messageId: msg.id });
-      return;
-    }
-
-    // ── Transition normale ────────────────────────────────────────────────────
-    await interaction.deferUpdate();
-    await advanceEtape(interaction, channel, nouvelleEtape);
-    return;
-  }
-
-  // ── Q1 : Types de dev choisis ─────────────────────────────────────────────────
-  if (interaction.isStringSelectMenu() && interaction.customId === 'assign_types') {
-    const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
-
-    await interaction.deferUpdate();
-    const channel = interaction.channel;
-    const typesChoisis = interaction.values; // ['builder', 'scripteur', 'ui']
-    assignState.set(channel.id, { ...assignState.get(channel.id), typesChoisis });
-
-    // Récupère les devs ayant les rôles choisis
-    const guild = interaction.guild;
-    const options = [];
-    for (const type of typesChoisis) {
-      const members = await getMembersWithRole(guild, CONFIG.DEV_ROLES[type]);
-      for (const m of members) {
-        if (!options.find(o => o.value === m.id)) {
-          options.push(new StringSelectMenuOptionBuilder().setLabel(`${m.username} — ${type}`).setValue(`${m.id}|${type}`));
-        }
-      }
-    }
-
-    if (options.length === 0) {
-      await channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ Aucun dev trouvé avec ces rôles.')] });
-      return;
-    }
-
-    const q2Row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId('assign_devs_assignes')
-        .setPlaceholder('Sélectionne les devs assignés...')
-        .setMinValues(1).setMaxValues(Math.min(options.length, 25))
-        .addOptions(options)
-    );
-
-    await interaction.message.edit({
-      embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('📋 Assignation des devs — Étape 2/2').setDescription(`Types retenus : **${typesChoisis.join(', ')}**\n\nSélectionne maintenant les devs **assignés** au projet :\n*(Les autres devs du même type seront automatiquement en backup)*`)],
-      components: [q2Row],
-    });
-    return;
-  }
-
-  // ── Q2 : Devs assignés choisis ────────────────────────────────────────────────
-  if (interaction.isStringSelectMenu() && interaction.customId === 'assign_devs_assignes') {
-    const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
-
-    await interaction.deferUpdate();
-    const channel = interaction.channel;
-    const guild = interaction.guild;
-    const state = assignState.get(channel.id) ?? {};
-    const typesChoisis = state.typesChoisis ?? [];
-
-    // Parse les devs assignés
-    const devsAssignes = interaction.values.map(v => {
-      const [id, type] = v.split('|');
-      return { id, type };
-    });
-
-    // Récupère tous les devs des types choisis → ceux pas assignés = backup
-    const devsBack = [];
-    const assignedIds = devsAssignes.map(d => d.id);
-    for (const type of typesChoisis) {
-      const members = await getMembersWithRole(guild, CONFIG.DEV_ROLES[type]);
-      for (const m of members) {
-        if (!assignedIds.includes(m.id)) {
-          devsBack.push({ id: m.id, type });
-        }
-      }
-    }
-
-    // Sauvegarde dans ticketInfos
-    const info = ticketInfos.get(channel.id) ?? {};
-    info.devsAssignes = devsAssignes;
-    info.devsBack = devsBack;
-    ticketInfos.set(channel.id, info);
-
-    // Supprime le message de sélection
-    await interaction.message.delete().catch(() => {});
-
-    // Avance l'étape
-    assignState.delete(channel.id);
-    await advanceEtape(interaction, channel, 1);
-    return;
-  }
-
-  // ── Étape précédente ─────────────────────────────────────────────────────────
+  // ── Étape précédente ──────────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'etape_precedente') {
-    const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
+    const channel       = interaction.channel;
+    const etapeActuelle = ticketEtapes.get(channel.id) ?? 0;
+    if (!canAdvanceEtape(interaction.member, channel.id, etapeActuelle)) {
+      await interaction.reply({ content: '❌ Tu n\'as pas la permission de faire ça.', ephemeral: true }); return;
+    }
+    const etapePrecedente = etapeActuelle - 1;
+    if (etapePrecedente < 0) { await interaction.reply({ content: '⚠️ Déjà à la première étape.', ephemeral: true }); return; }
     await interaction.deferUpdate();
-    const channel = interaction.channel;
-    const etapePrecedente = (ticketEtapes.get(channel.id) ?? 0) - 1;
-    if (etapePrecedente < 0) { await interaction.followUp({ content: '⚠️ Déjà à la première étape.', ephemeral: true }); return; }
     await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[etapePrecedente].id], { lockPermissions: false });
     ticketEtapes.set(channel.id, etapePrecedente);
-    const info = ticketInfos.get(channel.id) ?? {};
-    const fakeUser = { id: info.clientId };
-    const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, fakeUser, etapePrecedente, info.devsAssignes, info.devsBack);
+    const info         = ticketInfos.get(channel.id);
+    const assignment   = ticketDevAssignment.get(channel.id) ?? null;
+    const clientUser   = await client.users.fetch(info.clientId);
+    const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, clientUser, etapePrecedente, assignment)
+      .setColor(CONFIG.ETAPES[etapePrecedente].color);
     await interaction.message.edit({ embeds: [updatedEmbed], components: [buildStaffRow(etapePrecedente)] });
     await channel.send({ embeds: [new EmbedBuilder().setColor(CONFIG.ETAPES[etapePrecedente].color).setDescription(`◀️ Ticket revenu à l'étape : **${CONFIG.ETAPES[etapePrecedente].label}**\nPar : <@${interaction.user.id}>`)] });
     return;
   }
 
-  // ── Supprimer ticket ─────────────────────────────────────────────────────────
+  // ── Étape suivante ────────────────────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'etape_suivante') {
+    const channel       = interaction.channel;
+    const etapeActuelle = ticketEtapes.get(channel.id) ?? 0;
+    if (!canAdvanceEtape(interaction.member, channel.id, etapeActuelle)) {
+      await interaction.reply({ content: '❌ Tu n\'as pas la permission de faire ça.', ephemeral: true }); return;
+    }
+    const nouvelleEtape = etapeActuelle + 1;
+    if (nouvelleEtape >= CONFIG.ETAPES.length) { await interaction.reply({ content: '✅ Déjà à l\'étape finale.', ephemeral: true }); return; }
+
+    // ── Interception NÉGOCIATION → PAIEMENT_1 : formulaire d'assignation ─────
+    if (etapeActuelle === 0) {
+      await interaction.deferUpdate();
+      const formMsg = await sendFormEtape1(channel, []);
+      pendingDevForm.set(channel.id, { types: [], formMessageId: formMsg.id });
+      return;
+    }
+
+    // ── Avancement normal ─────────────────────────────────────────────────────
+    await interaction.deferUpdate();
+    await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id], { lockPermissions: false });
+    ticketEtapes.set(channel.id, nouvelleEtape);
+    const info       = ticketInfos.get(channel.id);
+    const assignment = ticketDevAssignment.get(channel.id) ?? null;
+    const clientUser = await client.users.fetch(info.clientId);
+    const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, clientUser, nouvelleEtape, assignment);
+    await interaction.message.edit({ embeds: [updatedEmbed], components: [buildStaffRow(nouvelleEtape)] });
+    await channel.send({ embeds: [new EmbedBuilder().setColor(CONFIG.ETAPES[nouvelleEtape].color).setDescription(`📌 Ticket avancé à l'étape : **${CONFIG.ETAPES[nouvelleEtape].label}**\nPar : <@${interaction.user.id}>`)] });
+    return;
+  }
+
+  // ── Formulaire assignation : sélection des types ──────────────────────────────
+  if (interaction.isStringSelectMenu() && interaction.customId === 'dev_form_types') {
+    const channel  = interaction.channel;
+    const pending  = pendingDevForm.get(channel.id);
+    if (!pending) { await interaction.reply({ content: '❌ Formulaire expiré.', ephemeral: true }); return; }
+    pending.types = interaction.values;
+    pendingDevForm.set(channel.id, pending);
+    await interaction.deferUpdate();
+    // Met à jour le footer du message pour montrer les types choisis
+    const embed = new EmbedBuilder()
+      .setTitle('👥 Assignation des devs — Étape 1/2')
+      .setDescription('Sélectionne le ou les **types de dev** retenus pour ce projet.\nTous les devs de ce type seront notifiés comme support/backup.')
+      .setColor(0x5865F2)
+      .setFooter({ text: `Types sélectionnés : ${pending.types.join(', ')}` });
+    await interaction.message.edit({ embeds: [embed] });
+    return;
+  }
+
+  // ── Formulaire assignation : annuler ──────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'dev_form_annuler') {
+    const channel = interaction.channel;
+    const pending = pendingDevForm.get(channel.id);
+    if (!pending) { await interaction.reply({ content: '❌ Formulaire déjà fermé.', ephemeral: true }); return; }
+    await interaction.deferUpdate();
+    pendingDevForm.delete(channel.id);
+    await interaction.message.delete().catch(() => {});
+    await channel.send({ embeds: [new EmbedBuilder().setColor(0x99AAB5).setDescription(`❌ Formulaire d'assignation annulé par <@${interaction.user.id}>.`)] });
+    return;
+  }
+
+  // ── Formulaire assignation : passer à l'étape 2 ──────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'dev_form_etape2') {
+    const channel = interaction.channel;
+    const pending = pendingDevForm.get(channel.id);
+    if (!pending) { await interaction.reply({ content: '❌ Formulaire expiré.', ephemeral: true }); return; }
+    if (pending.types.length === 0) {
+      await interaction.reply({ content: '⚠️ Sélectionne au moins un type de dev avant de continuer.', ephemeral: true }); return;
+    }
+
+    // Ouvre le modal pour entrer les pseudos des devs assignés
+    const modal = new ModalBuilder()
+      .setCustomId('dev_form_modal_assignes')
+      .setTitle('👥 Assignation des devs — Étape 2/2');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('pseudos_assignes')
+          .setLabel('Pseudos des devs assignés au projet')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('Ex: Jean, Marc, Sophie\n(Sépare les pseudos par des virgules)')
+          .setRequired(true)
+      )
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // ── Formulaire assignation : modal étape 2 soumis ────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === 'dev_form_modal_assignes') {
+    await interaction.deferReply({ ephemeral: true });
+    const channel = interaction.channel;
+    const pending = pendingDevForm.get(channel.id);
+    if (!pending) { await interaction.editReply({ content: '❌ Formulaire expiré, recommence depuis le bouton ➡️.' }); return; }
+
+    const pseudosRaw = interaction.fields.getTextInputValue('pseudos_assignes');
+    const pseudos    = pseudosRaw.split(',').map(p => p.trim().toLowerCase()).filter(Boolean);
+    const guild      = interaction.guild;
+
+    // Fetch tous les membres du serveur
+    await guild.members.fetch();
+
+    // Trouve les membres correspondant aux pseudos tapés
+    const assignesIds = [];
+    const notFound    = [];
+    for (const pseudo of pseudos) {
+      const found = guild.members.cache.find(m =>
+        m.user.username.toLowerCase() === pseudo ||
+        (m.nickname && m.nickname.toLowerCase() === pseudo) ||
+        m.user.globalName?.toLowerCase() === pseudo
+      );
+      if (found) assignesIds.push(found.id);
+      else notFound.push(pseudo);
+    }
+
+    if (assignesIds.length === 0) {
+      await interaction.editReply({ content: `❌ Aucun membre trouvé. Vérifie les pseudos :\n${pseudos.map(p => `• \`${p}\``).join('\n')}` }); return;
+    }
+
+    // Identifie les devs backup : membres avec les rôles des types sélectionnés, mais pas dans assignés
+    const backupIds = [];
+    for (const type of pending.types) {
+      const roleId = CONFIG.DEV_ROLES[type];
+      if (!roleId) continue;
+      for (const [, member] of guild.members.cache) {
+        if (member.roles.cache.has(roleId) && !assignesIds.includes(member.id) && !backupIds.includes(member.id)) {
+          backupIds.push(member.id);
+        }
+      }
+    }
+
+    // Sauvegarde l'assignation
+    const assignment = { types: pending.types, assignes: assignesIds, backup: backupIds };
+    ticketDevAssignment.set(channel.id, assignment);
+    pendingDevForm.delete(channel.id);
+
+    // Donne les permissions write aux devs assignés
+    for (const userId of assignesIds) {
+      await channel.permissionOverwrites.edit(userId, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true,
+      }).catch(() => {});
+    }
+
+    // Avance le ticket à PAIEMENT_1
+    const nouvelleEtape = 1;
+    await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id], { lockPermissions: false });
+    ticketEtapes.set(channel.id, nouvelleEtape);
+
+    // Met à jour l'embed principal
+    const info       = ticketInfos.get(channel.id);
+    const clientUser = await client.users.fetch(info.clientId);
+    const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, clientUser, nouvelleEtape, assignment);
+
+    // Cherche le message embed original pour le mettre à jour
+    const messages = await channel.messages.fetch({ limit: 20 });
+    const embedMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0 && m.components.length > 0);
+    if (embedMsg) await embedMsg.edit({ embeds: [updatedEmbed], components: [buildStaffRow(nouvelleEtape)] });
+
+    // Supprime le message du formulaire
+    const formMsg = await channel.messages.fetch(pending.formMessageId).catch(() => null);
+    if (formMsg) await formMsg.delete().catch(() => {});
+
+    // Message de confirmation dans le ticket
+    const typesLabel = pending.types.map(t => {
+      const icons = { builder: '🏗️ Builder', scripteur: '💻 Scripteur', ui: '🎨 UI' };
+      return icons[t] ?? t;
+    }).join(', ');
+
+    const warningNotFound = notFound.length > 0
+      ? `\n\n⚠️ Pseudos non trouvés : ${notFound.map(p => `\`${p}\``).join(', ')}` : '';
+
+    await channel.send({
+      embeds: [new EmbedBuilder()
+        .setColor(CONFIG.ETAPES[nouvelleEtape].color)
+        .setTitle('✅ Devs assignés au projet')
+        .addFields(
+          { name: '🗂️ Types retenus',  value: typesLabel,                                                      inline: false },
+          { name: '🔨 Devs assignés',  value: assignesIds.map(id => `🔨 <@${id}>`).join(', ') || '*Aucun*',   inline: true  },
+          { name: '🔧 Support/Backup', value: backupIds.map(id => `<@${id}>`).join(', ') || '*Aucun*',         inline: true  },
+        )
+        .setDescription(`📌 Ticket avancé à l'étape : **${CONFIG.ETAPES[nouvelleEtape].label}**\nPar : <@${interaction.user.id}>${warningNotFound}`)
+        .setFooter({ text: 'HEO Studio • Assignation devs' })
+        .setTimestamp()],
+    });
+
+    await interaction.editReply({ content: `✅ ${assignesIds.length} dev(s) assigné(s) ! Le ticket passe en **${CONFIG.ETAPES[nouvelleEtape].label}**.` });
+    return;
+  }
+
+  // ── Supprimer ticket contrat ──────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'supprimer_ticket') {
     const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
     await interaction.reply({
       content: '⚠️ Tu es sûr de vouloir **supprimer définitivement** ce ticket ?',
-      components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirmer_suppression').setLabel('✅ Oui, supprimer').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('annuler_suppression').setLabel('❌ Annuler').setStyle(ButtonStyle.Secondary))],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('confirmer_suppression').setLabel('✅ Oui, supprimer').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('annuler_suppression').setLabel('❌ Annuler').setStyle(ButtonStyle.Secondary),
+      )],
       ephemeral: true,
     });
     return;
   }
+
   if (interaction.isButton() && interaction.customId === 'confirmer_suppression') {
     const channel = interaction.channel;
-    ticketEtapes.delete(channel.id); ticketInfos.delete(channel.id);
+    ticketEtapes.delete(channel.id);
+    ticketInfos.delete(channel.id);
+    ticketDevAssignment.delete(channel.id);
+    pendingDevForm.delete(channel.id);
     await interaction.reply({ content: '🗑️ Suppression en cours...', ephemeral: true });
     setTimeout(() => channel.delete().catch(() => {}), 2000);
     return;
   }
-  if (interaction.isButton() && interaction.customId === 'annuler_suppression') { await interaction.reply({ content: '✅ Suppression annulée.', ephemeral: true }); return; }
+
+  if (interaction.isButton() && interaction.customId === 'annuler_suppression') {
+    await interaction.reply({ content: '✅ Suppression annulée.', ephemeral: true }); return;
+  }
 
   // ── Annuler contrat ───────────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'annuler_contrat') {
     const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) { await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return; }
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
     await interaction.deferUpdate();
     const channel = interaction.channel;
     await channel.setParent(CONFIG.CATEGORIES.ANNULE, { lockPermissions: false });
-    ticketEtapes.set(channel.id, -1); ticketInfos.delete(channel.id);
+    ticketEtapes.set(channel.id, -1);
+    ticketInfos.delete(channel.id);
+    ticketDevAssignment.delete(channel.id);
     const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0]).setColor(0xED4245).setFooter({ text: 'HEO Studio • ❌ Contrat annulé' });
-    await interaction.message.edit({ embeds: [updatedEmbed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('etape_precedente').setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(true), new ButtonBuilder().setCustomId('etape_suivante').setLabel('Annulé').setStyle(ButtonStyle.Danger).setDisabled(true), new ButtonBuilder().setCustomId('annuler_contrat').setLabel('🚫 Annulé').setStyle(ButtonStyle.Secondary).setDisabled(true), new ButtonBuilder().setCustomId('supprimer_ticket').setLabel('🗑️ Supprimer').setStyle(ButtonStyle.Secondary))] });
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('etape_precedente').setLabel('◀️').setStyle(ButtonStyle.Secondary).setDisabled(true),
+      new ButtonBuilder().setCustomId('etape_suivante').setLabel('Annulé').setStyle(ButtonStyle.Danger).setDisabled(true),
+      new ButtonBuilder().setCustomId('annuler_contrat').setLabel('🚫 Annulé').setStyle(ButtonStyle.Secondary).setDisabled(true),
+      new ButtonBuilder().setCustomId('supprimer_ticket').setLabel('🗑️ Supprimer').setStyle(ButtonStyle.Secondary),
+    );
+    await interaction.message.edit({ embeds: [updatedEmbed], components: [disabledRow] });
     await channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Contrat **annulé** par <@${interaction.user.id}>`)] });
     return;
   }
 });
-
-// ─── AVANCER ÉTAPE (fonction réutilisable) ─────────────────────────────────────
-async function advanceEtape(interaction, channel, nouvelleEtape) {
-  await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id], { lockPermissions: false });
-  ticketEtapes.set(channel.id, nouvelleEtape);
-  const info = ticketInfos.get(channel.id) ?? {};
-  const fakeUser = { id: info.clientId };
-
-  // Cherche le message principal (le premier embed du ticket)
-  const messages = await channel.messages.fetch({ limit: 50 });
-  const mainMsg = messages.find(m => m.embeds.length > 0 && m.components.length > 0 && m.author.id === client.user.id && m.components[0].components.some(c => c.customId === 'etape_suivante'));
-
-  if (mainMsg) {
-    const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, fakeUser, nouvelleEtape, info.devsAssignes ?? [], info.devsBack ?? []);
-    await mainMsg.edit({ embeds: [updatedEmbed], components: [buildStaffRow(nouvelleEtape)] });
-  }
-
-  await channel.send({ embeds: [new EmbedBuilder().setColor(CONFIG.ETAPES[nouvelleEtape].color).setDescription(`📌 Ticket avancé à l'étape : **${CONFIG.ETAPES[nouvelleEtape].label}**\nPar : <@${interaction.user.id}>`)] });
-}
-
-// ─── UTILS ────────────────────────────────────────────────────────────────────
-async function getMembersWithRole(guild, roleId) {
-  await guild.members.fetch();
-  return guild.members.cache.filter(m => m.roles.cache.has(roleId)).map(m => ({ id: m.id, username: m.user.username }));
-}
 
 client.login(CONFIG.TOKEN);
