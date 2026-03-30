@@ -530,7 +530,40 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.reply({ content: '⚠️ Sélectionne au moins un type de dev avant de continuer.', ephemeral: true }); return;
     }
 
-    // Ouvre le modal pour entrer les pseudos des devs assignés
+    await interaction.deferUpdate();
+
+    // Supprime le message étape 1
+    await interaction.message.delete().catch(() => {});
+
+    // ✅ Envoie un embed étape 2 dans le salon (comme étape 1)
+    const embed2 = new EmbedBuilder()
+      .setTitle('👥 Assignation des devs — Étape 2/2')
+      .setDescription(
+        `Types retenus : **${pending.types.join(', ')}**\n\n` +
+        `Entre les **pseudos des devs assignés** au projet.\n` +
+        `Sépare les pseudos par des **virgules**.\n\n` +
+        `> Ex: \`Jean, Marc, Sophie\``
+      )
+      .setColor(0x5865F2)
+      .setFooter({ text: 'Pseudos exacts (username, pseudo serveur ou globalName)' });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('dev_form_annuler_etape2').setLabel('❌ Annuler').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('dev_form_ouvrir_modal').setLabel('✏️ Entrer les pseudos').setStyle(ButtonStyle.Primary),
+    );
+
+    const msg2 = await channel.send({ embeds: [embed2], components: [row] });
+    pending.formMessageId = msg2.id;
+    pendingDevForm.set(channel.id, pending);
+    return;
+  }
+
+  // ── Formulaire assignation : ouvre le modal depuis l'étape 2 ─────────────────
+  if (interaction.isButton() && interaction.customId === 'dev_form_ouvrir_modal') {
+    const channel = interaction.channel;
+    const pending = pendingDevForm.get(channel.id);
+    if (!pending) { await interaction.reply({ content: '❌ Formulaire expiré.', ephemeral: true }); return; }
+
     const modal = new ModalBuilder()
       .setCustomId('dev_form_modal_assignes')
       .setTitle('👥 Assignation des devs — Étape 2/2');
@@ -545,6 +578,16 @@ client.on('interactionCreate', async (interaction) => {
       )
     );
     await interaction.showModal(modal);
+    return;
+  }
+
+  // ── Formulaire assignation : annuler depuis étape 2 ──────────────────────────
+  if (interaction.isButton() && interaction.customId === 'dev_form_annuler_etape2') {
+    const channel = interaction.channel;
+    pendingDevForm.delete(channel.id);
+    await interaction.deferUpdate();
+    await interaction.message.delete().catch(() => {});
+    await channel.send({ embeds: [new EmbedBuilder().setColor(0x99AAB5).setDescription(`❌ Formulaire d'assignation annulé par <@${interaction.user.id}>.`)] });
     return;
   }
 
@@ -596,6 +639,27 @@ client.on('interactionCreate', async (interaction) => {
     ticketDevAssignment.set(channel.id, assignment);
     pendingDevForm.delete(channel.id);
 
+    // ✅ Retire l'accès au rôle global dev
+    await channel.permissionOverwrites.delete(CONFIG.DEV_ROLE_ID).catch(() => {});
+
+    // ✅ Retire les types NON sélectionnés
+    for (const [type, roleId] of Object.entries(CONFIG.DEV_ROLES)) {
+      if (!pending.types.includes(type)) {
+        await channel.permissionOverwrites.delete(roleId).catch(() => {});
+      }
+    }
+
+    // ✅ Garde les types SÉLECTIONNÉS (backup inclus automatiquement)
+    for (const type of pending.types) {
+      const roleId = CONFIG.DEV_ROLES[type];
+      if (!roleId) continue;
+      await channel.permissionOverwrites.edit(roleId, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true,
+      }).catch(() => {});
+    }
+
     // Donne les permissions write aux devs assignés
     for (const userId of assignesIds) {
       await channel.permissionOverwrites.edit(userId, {
@@ -620,7 +684,7 @@ client.on('interactionCreate', async (interaction) => {
     const embedMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0 && m.components.length > 0);
     if (embedMsg) await embedMsg.edit({ embeds: [updatedEmbed], components: [buildStaffRow(nouvelleEtape)] });
 
-    // Supprime le message du formulaire
+    // Supprime le message du formulaire étape 2
     const formMsg = await channel.messages.fetch(pending.formMessageId).catch(() => null);
     if (formMsg) await formMsg.delete().catch(() => {});
 
