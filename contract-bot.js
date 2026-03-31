@@ -33,6 +33,7 @@ const CONFIG = {
     builder:   '1488194780809789511',
     ui:        '1488194616413913088',
     scripteur: '1488194696831307776',
+    animateur: '1488581098563702914', // ✅ Nouveau
   },
 
   CATEGORIES: {
@@ -62,11 +63,19 @@ const CONFIG = {
 // ──────────────────────────────────────────────────────────────────────────────
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
-const ticketEtapes        = new Map(); // channelId → etapeIndex
-const ticketInfos         = new Map(); // channelId → { nom, clientId }
-const ticketDevAssignment = new Map(); // channelId → { types[], assignes[userId], backup[userId] }
-const pendingDevForm      = new Map(); // channelId → { types[], formMessageId }
+const ticketEtapes        = new Map();
+const ticketInfos         = new Map();
+const ticketDevAssignment = new Map();
+const pendingDevForm      = new Map();
 // ──────────────────────────────────────────────────────────────────────────────
+
+// ✅ Icônes par type de dev
+const DEV_TYPE_ICONS = {
+  builder:   '🏗️ Builder',
+  scripteur: '💻 Scripteur',
+  ui:        '🎨 UI',
+  animateur: '🎭 Animateur',
+};
 
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
@@ -146,17 +155,16 @@ function buildEmbed(nom, description, budget, delai, user, etapeIndex, devAssign
     .setTimestamp();
 
   if (devAssignment) {
-    const typesLabel = devAssignment.types.map(t => {
-      const icons = { builder: '🏗️ Builder', scripteur: '💻 Scripteur', ui: '🎨 UI' };
-      return icons[t] ?? t;
-    }).join(', ');
+    const typesLabel = devAssignment.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ');
 
+    // ✅ Icône 🔨 devant chaque dev assigné
     const assignesStr = devAssignment.assignes.length > 0
-      ? devAssignment.assignes.map(id => `🔨 <@${id}>`).join(', ')
+      ? devAssignment.assignes.map(id => `🔨 <@${id}>`).join('\n')
       : '*Aucun*';
 
+    // ✅ Icône 🔧 devant chaque backup
     const backupStr = devAssignment.backup.length > 0
-      ? devAssignment.backup.map(id => `<@${id}>`).join(', ')
+      ? devAssignment.backup.map(id => `🔧 <@${id}>`).join('\n')
       : '*Aucun*';
 
     embed.addFields(
@@ -169,7 +177,6 @@ function buildEmbed(nom, description, budget, delai, user, etapeIndex, devAssign
   return embed;
 }
 
-// Vérifie si un membre peut avancer les étapes (staff ou dev assigné si etape >= 1)
 function canAdvanceEtape(member, channelId, etapeActuelle) {
   const isStaff = member.roles.cache.has(CONFIG.STAFF_ROLE_ID) || member.permissions.has(PermissionFlagsBits.Administrator);
   if (isStaff) return true;
@@ -198,13 +205,12 @@ function buildSupportRow(ferme) {
   );
 }
 
-// Envoie le message de l'étape 1 du formulaire (choix des types)
 async function sendFormEtape1(channel, selectedTypes = []) {
   const select = new StringSelectMenuBuilder()
     .setCustomId('dev_form_types')
     .setPlaceholder('Sélectionne le(s) type(s) de dev retenus...')
     .setMinValues(1)
-    .setMaxValues(3)
+    .setMaxValues(4) // ✅ 4 types
     .addOptions(
       new StringSelectMenuOptionBuilder()
         .setLabel('🏗️ Builder')
@@ -221,6 +227,11 @@ async function sendFormEtape1(channel, selectedTypes = []) {
         .setDescription('Designer d\'interfaces')
         .setValue('ui')
         .setDefault(selectedTypes.includes('ui')),
+      new StringSelectMenuOptionBuilder() // ✅ Nouveau
+        .setLabel('🎭 Animateur')
+        .setDescription('Animateur / gestion d\'événements')
+        .setValue('animateur')
+        .setDefault(selectedTypes.includes('animateur')),
     );
 
   const row1 = new ActionRowBuilder().addComponents(select);
@@ -420,7 +431,7 @@ client.on('interactionCreate', async (interaction) => {
         { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
         { id: user.id,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
         { id: CONFIG.STAFF_ROLE_ID,  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
-        // Tous les devs voient la négociation (lecture seule)
+        // Tous les devs voient la négociation
         { id: CONFIG.DEV_ROLE_ID,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
       ],
     });
@@ -499,7 +510,6 @@ client.on('interactionCreate', async (interaction) => {
     pending.types = interaction.values;
     pendingDevForm.set(channel.id, pending);
     await interaction.deferUpdate();
-    // Met à jour le footer du message pour montrer les types choisis
     const embed = new EmbedBuilder()
       .setTitle('👥 Assignation des devs — Étape 1/2')
       .setDescription('Sélectionne le ou les **types de dev** retenus pour ce projet.\nTous les devs de ce type seront notifiés comme support/backup.')
@@ -531,15 +541,12 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     await interaction.deferUpdate();
-
-    // Supprime le message étape 1
     await interaction.message.delete().catch(() => {});
 
-    // ✅ Envoie un embed étape 2 dans le salon (comme étape 1)
     const embed2 = new EmbedBuilder()
       .setTitle('👥 Assignation des devs — Étape 2/2')
       .setDescription(
-        `Types retenus : **${pending.types.join(', ')}**\n\n` +
+        `Types retenus : **${pending.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ')}**\n\n` +
         `Entre les **pseudos des devs assignés** au projet.\n` +
         `Sépare les pseudos par des **virgules**.\n\n` +
         `> Ex: \`Jean, Marc, Sophie\``
@@ -602,10 +609,8 @@ client.on('interactionCreate', async (interaction) => {
     const pseudos    = pseudosRaw.split(',').map(p => p.trim().toLowerCase()).filter(Boolean);
     const guild      = interaction.guild;
 
-    // Fetch tous les membres du serveur
     await guild.members.fetch();
 
-    // Trouve les membres correspondant aux pseudos tapés
     const assignesIds = [];
     const notFound    = [];
     for (const pseudo of pseudos) {
@@ -622,7 +627,6 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.editReply({ content: `❌ Aucun membre trouvé. Vérifie les pseudos :\n${pseudos.map(p => `• \`${p}\``).join('\n')}` }); return;
     }
 
-    // Identifie les devs backup : membres avec les rôles des types sélectionnés, mais pas dans assignés
     const backupIds = [];
     for (const type of pending.types) {
       const roleId = CONFIG.DEV_ROLES[type];
@@ -634,7 +638,6 @@ client.on('interactionCreate', async (interaction) => {
       }
     }
 
-    // Sauvegarde l'assignation
     const assignment = { types: pending.types, assignes: assignesIds, backup: backupIds };
     ticketDevAssignment.set(channel.id, assignment);
     pendingDevForm.delete(channel.id);
@@ -660,7 +663,7 @@ client.on('interactionCreate', async (interaction) => {
       }).catch(() => {});
     }
 
-    // Donne les permissions write aux devs assignés
+    // Donne les permissions aux devs assignés individuellement
     for (const userId of assignesIds) {
       await channel.permissionOverwrites.edit(userId, {
         ViewChannel: true,
@@ -669,31 +672,32 @@ client.on('interactionCreate', async (interaction) => {
       }).catch(() => {});
     }
 
-    // Avance le ticket à PAIEMENT_1
+    // ✅ FIX bouton affichage : génère le bon row AVANT d'éditer le message
     const nouvelleEtape = 1;
     await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id], { lockPermissions: false });
     ticketEtapes.set(channel.id, nouvelleEtape);
 
-    // Met à jour l'embed principal
-    const info       = ticketInfos.get(channel.id);
-    const clientUser = await client.users.fetch(info.clientId);
+    const info         = ticketInfos.get(channel.id);
+    const clientUser   = await client.users.fetch(info.clientId);
     const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, clientUser, nouvelleEtape, assignment);
+    const newStaffRow  = buildStaffRow(nouvelleEtape); // ✅ Génère "➡️ Passer à : 🔨 En cours de développement"
 
-    // Cherche le message embed original pour le mettre à jour
-    const messages = await channel.messages.fetch({ limit: 20 });
-    const embedMsg = messages.find(m => m.author.id === client.user.id && m.embeds.length > 0 && m.components.length > 0);
-    if (embedMsg) await embedMsg.edit({ embeds: [updatedEmbed], components: [buildStaffRow(nouvelleEtape)] });
+    // ✅ Cherche le message embed principal (celui avec le bouton etape_suivante)
+    const messages = await channel.messages.fetch({ limit: 50 });
+    const embedMsg = messages.find(m =>
+      m.author.id === client.user.id &&
+      m.embeds.length > 0 &&
+      m.components.length > 0 &&
+      m.components[0]?.components?.some(c => c.customId === 'etape_suivante')
+    );
+    if (embedMsg) await embedMsg.edit({ embeds: [updatedEmbed], components: [newStaffRow] });
 
     // Supprime le message du formulaire étape 2
     const formMsg = await channel.messages.fetch(pending.formMessageId).catch(() => null);
     if (formMsg) await formMsg.delete().catch(() => {});
 
-    // Message de confirmation dans le ticket
-    const typesLabel = pending.types.map(t => {
-      const icons = { builder: '🏗️ Builder', scripteur: '💻 Scripteur', ui: '🎨 UI' };
-      return icons[t] ?? t;
-    }).join(', ');
-
+    // Message de confirmation
+    const typesLabel = pending.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ');
     const warningNotFound = notFound.length > 0
       ? `\n\n⚠️ Pseudos non trouvés : ${notFound.map(p => `\`${p}\``).join(', ')}` : '';
 
@@ -702,9 +706,9 @@ client.on('interactionCreate', async (interaction) => {
         .setColor(CONFIG.ETAPES[nouvelleEtape].color)
         .setTitle('✅ Devs assignés au projet')
         .addFields(
-          { name: '🗂️ Types retenus',  value: typesLabel,                                                      inline: false },
-          { name: '🔨 Devs assignés',  value: assignesIds.map(id => `🔨 <@${id}>`).join(', ') || '*Aucun*',   inline: true  },
-          { name: '🔧 Support/Backup', value: backupIds.map(id => `<@${id}>`).join(', ') || '*Aucun*',         inline: true  },
+          { name: '🗂️ Types retenus',  value: typesLabel,                                                        inline: false },
+          { name: '🔨 Devs assignés',  value: assignesIds.map(id => `🔨 <@${id}>`).join('\n') || '*Aucun*',     inline: true  },
+          { name: '🔧 Support/Backup', value: backupIds.map(id => `🔧 <@${id}>`).join('\n') || '*Aucun*',       inline: true  },
         )
         .setDescription(`📌 Ticket avancé à l'étape : **${CONFIG.ETAPES[nouvelleEtape].label}**\nPar : <@${interaction.user.id}>${warningNotFound}`)
         .setFooter({ text: 'HEO Studio • Assignation devs' })
