@@ -228,8 +228,8 @@ async function sendFormEtape1(channel, selectedTypes = []) {
         .setValue('ui')
         .setDefault(selectedTypes.includes('ui')),
       new StringSelectMenuOptionBuilder() // ✅ Nouveau
-        .setLabel('🎭 Animateur')
-        .setDescription('Animateur / gestion d\'événements')
+        .setLabel('💨 Animateur')
+        .setDescription('Animateur : animation')
         .setValue('animateur')
         .setDefault(selectedTypes.includes('animateur')),
     );
