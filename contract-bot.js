@@ -74,7 +74,7 @@ const DEV_TYPE_ICONS = {
   builder:   '🏗️ Builder',
   scripteur: '💻 Scripteur',
   ui:        '🎨 UI',
-  animateur: '🎭 Animateur',
+  animateur: '💨 Animateur',
 };
 
 client.once('ready', async () => {
