@@ -25,10 +25,8 @@ const CONFIG = {
   SUPPORT_PANEL_CHANNEL_ID: '1487752758294614076',
   STAFF_ROLE_ID:            '1487848016110162153',
 
-  // Rôle global dev (accès négo)
   DEV_ROLE_ID:              '1485191413829337299',
 
-  // Rôles par type
   DEV_ROLES: {
     builder:   '1488194780809789511',
     ui:        '1488194616413913088',
@@ -60,21 +58,24 @@ const CONFIG = {
     report:     { label: '🚨 Report',     color: 0xED4245 },
   },
 
-  // ─── RECRUTEMENT ────────────────────────────────────────────────────────────
+  // ─── RECRUTEMENT ──────────────────────────────────────────────────────────
   RECRUTEMENT_PANEL_CHANNEL_ID: '1488553805258821662',
   RECRUTEMENT_CATEGORY_ID:      '1488554531217346731',
   ROLE_ATT_ENTRETIEN:           '1485313117603893348',
   ROLE_DEV_GLOBAL:              '1485191413829337299',
   ROLE_SEPARATION:              '1485191413829337293',
 
-  // Index 0 = 5 étoiles … index 4 = 1 étoile
   ETOILES_ROLES: {
     ui:        ['1485321773665751141','1485321825834766587','1485321711158038841','1485321660138524763','1485320858624065757'],
     builder:   ['1485322061994786918','1485321763985293392','1485321427845648385','1485321015721591024','1485320049073061952'],
     animateur: ['1488587193932058654','1488587312269885590','1488587339105308752','1488587372319871197','1488587400518041612'],
     scripteur: ['1485321122646851735','1485321178859180165','1485321077495300298','1485321012709953717','1488194696831307776'],
   },
-  // ────────────────────────────────────────────────────────────────────────────
+
+  // ─── ASSETS / BOUTIQUE ────────────────────────────────────────────────────
+  SHOP_CHANNEL_ID:   '1488940435593236570',
+  ACHAT_CATEGORY_ID: '1488943924167970987',
+  VENDEUR_ROLE_ID:   '1488952681278996571',
 };
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -83,16 +84,25 @@ const ticketEtapes        = new Map();
 const ticketInfos         = new Map();
 const ticketDevAssignment = new Map();
 const pendingDevForm      = new Map();
-const pendingRecrutement  = new Map(); // { types: [], etoiles: { ui: '0', ... } }
+const pendingRecrutement  = new Map();
+const pendingShop         = new Map();
 // ──────────────────────────────────────────────────────────────────────────────
 
-// ✅ Icônes par type de dev
 const DEV_TYPE_ICONS = {
   builder:   '🏗️ Builder',
   scripteur: '💻 Scripteur',
   ui:        '🎨 UI',
   animateur: '💨 Animateur',
 };
+
+const ASSET_TYPE_ICONS = {
+  build:     '🏗️ Build',
+  ui:        '🎨 UI',
+  script:    '💻 Script',
+  animation: '💨 Animation',
+};
+
+const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
 
 client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
@@ -105,6 +115,19 @@ async function registerSlashCommands() {
     new SlashCommandBuilder()
       .setName('contrats')
       .setDescription('Liste tous les contrats en cours')
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('shop')
+      .setDescription('Publier un nouvel asset dans la boutique (admin uniquement)')
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('modif')
+      .setDescription('Modifier un asset existant dans la boutique (admin uniquement)')
+      .addStringOption(opt =>
+        opt.setName('message_id')
+          .setDescription('ID du message de l\'asset à modifier')
+          .setRequired(true)
+      )
       .toJSON(),
   ];
   const rest = new REST({ version: '10' }).setToken(CONFIG.TOKEN);
@@ -119,7 +142,6 @@ async function registerSlashCommands() {
 // ─── SETUP ────────────────────────────────────────────────────────────────────
 if (process.argv[2] === 'setup') {
   client.once('ready', async () => {
-    // Panel contrats
     const contractChannel = await client.channels.fetch(CONFIG.PANEL_CHANNEL_ID);
     await contractChannel.send({
       embeds: [new EmbedBuilder()
@@ -132,7 +154,6 @@ if (process.argv[2] === 'setup') {
       )],
     });
 
-    // Panel support
     const supportChannel = await client.channels.fetch(CONFIG.SUPPORT_PANEL_CHANNEL_ID);
     await supportChannel.send({
       embeds: [new EmbedBuilder()
@@ -152,7 +173,6 @@ if (process.argv[2] === 'setup') {
       )],
     });
 
-    // Panel recrutement
     const recrutChannel = await client.channels.fetch(CONFIG.RECRUTEMENT_PANEL_CHANNEL_ID);
     await recrutChannel.send({
       embeds: [new EmbedBuilder()
@@ -264,10 +284,34 @@ async function sendFormEtape1(channel, selectedTypes = []) {
   return await channel.send({ embeds: [embed], components: [row1, row2] });
 }
 
+function buildAssetEmbed(nom, desc, prix, typeLabel, mediaUrl) {
+  const embed = new EmbedBuilder()
+    .setTitle(`${typeLabel} — ${nom}`)
+    .setColor(0x5865F2)
+    .addFields(
+      { name: '📝 Description', value: desc,      inline: false },
+      { name: '💰 Prix',        value: prix,       inline: true  },
+      { name: '🗂️ Type',        value: typeLabel,  inline: true  },
+    )
+    .setFooter({ text: 'HEO Studio • Boutique' })
+    .setTimestamp();
+
+  if (mediaUrl) {
+    const isImage = IMAGE_EXTS.some(ext => mediaUrl.toLowerCase().includes(ext));
+    if (isImage) {
+      embed.setImage(mediaUrl);
+    } else {
+      embed.addFields({ name: '🎬 Médias', value: `[Voir le média](${mediaUrl})`, inline: false });
+    }
+  }
+
+  return embed;
+}
+
 // ─── INTERACTIONS ─────────────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
 
-  // ── /contrats ────────────────────────────────────────────────────────────────
+  // ── /contrats ─────────────────────────────────────────────────────────────────
   if (interaction.isChatInputCommand() && interaction.commandName === 'contrats') {
     await interaction.deferReply({ ephemeral: false });
     const guild = interaction.guild;
@@ -294,21 +338,285 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // ─── ASSETS / BOUTIQUE ──────────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── /shop ─────────────────────────────────────────────────────────────────────
+  if (interaction.isChatInputCommand() && interaction.commandName === 'shop') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé aux admins.', ephemeral: true }); return;
+    }
+    const modal = new ModalBuilder()
+      .setCustomId('modal_shop_asset')
+      .setTitle('🛒 Publier un asset — HEO Studio');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_nom').setLabel('Nom de l\'asset').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Map hospitalière V2, UI Pack médical...').setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_desc').setLabel('Description').setStyle(TextInputStyle.Paragraph).setPlaceholder('Décris l\'asset en détail (contenu, usage, compatibilité...)').setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_prix').setLabel('Prix').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 500 Robux, 10€, Gratuit...').setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_type').setLabel('Type (build / ui / script / animation)').setStyle(TextInputStyle.Short).setPlaceholder('build, ui, script ou animation').setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_media').setLabel('URL du média (image ou vidéo)').setStyle(TextInputStyle.Short).setPlaceholder('https://... (lien direct image ou vidéo) — optionnel').setRequired(false)
+      ),
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // ── Modal /shop soumis ────────────────────────────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_shop_asset') {
+    await interaction.deferReply({ ephemeral: true });
+
+    const nom      = interaction.fields.getTextInputValue('asset_nom');
+    const desc     = interaction.fields.getTextInputValue('asset_desc');
+    const prix     = interaction.fields.getTextInputValue('asset_prix');
+    const typeRaw  = interaction.fields.getTextInputValue('asset_type').toLowerCase().trim();
+    const mediaUrl = interaction.fields.getTextInputValue('asset_media').trim();
+
+    if (!ASSET_TYPE_ICONS[typeRaw]) {
+      await interaction.editReply({ content: '❌ Type invalide. Utilise : `build`, `ui`, `script` ou `animation`.' }); return;
+    }
+
+    const typeLabel   = ASSET_TYPE_ICONS[typeRaw];
+    const shopChannel = await client.channels.fetch(CONFIG.SHOP_CHANNEL_ID);
+    const embed       = buildAssetEmbed(nom, desc, prix, typeLabel, mediaUrl);
+
+    const msg = await shopChannel.send({
+      embeds: [embed],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('acheter_asset').setLabel('🛒 Acheter').setStyle(ButtonStyle.Success)
+      )],
+    });
+
+    await interaction.editReply({
+      content: `✅ Asset publié dans ${shopChannel} !\nID du message : \`${msg.id}\` *(garde-le pour /modif)*`,
+    });
+    return;
+  }
+
+  // ── /modif ────────────────────────────────────────────────────────────────────
+  if (interaction.isChatInputCommand() && interaction.commandName === 'modif') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé aux admins.', ephemeral: true }); return;
+    }
+
+    const messageId   = interaction.options.getString('message_id');
+    const shopChannel = await client.channels.fetch(CONFIG.SHOP_CHANNEL_ID);
+
+    try {
+      await shopChannel.messages.fetch(messageId);
+    } catch {
+      await interaction.reply({ content: '❌ Message introuvable dans le salon boutique. Vérifie l\'ID.', ephemeral: true }); return;
+    }
+
+    pendingShop.set(interaction.user.id, { messageId, channelId: shopChannel.id });
+
+    const modal = new ModalBuilder()
+      .setCustomId('modal_modif_asset')
+      .setTitle('✏️ Modifier un asset — HEO Studio');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_nom').setLabel('Nouveau nom').setStyle(TextInputStyle.Short).setPlaceholder('Laisse vide pour ne pas changer').setRequired(false)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_desc').setLabel('Nouvelle description').setStyle(TextInputStyle.Paragraph).setPlaceholder('Laisse vide pour ne pas changer').setRequired(false)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_prix').setLabel('Nouveau prix').setStyle(TextInputStyle.Short).setPlaceholder('Laisse vide pour ne pas changer').setRequired(false)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_type').setLabel('Nouveau type (build/ui/script/animation)').setStyle(TextInputStyle.Short).setPlaceholder('Laisse vide pour ne pas changer').setRequired(false)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('asset_media').setLabel('Nouvelle URL média').setStyle(TextInputStyle.Short).setPlaceholder('Laisse vide pour ne pas changer').setRequired(false)
+      ),
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // ── Modal /modif soumis ───────────────────────────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_modif_asset') {
+    await interaction.deferReply({ ephemeral: true });
+
+    const pending = pendingShop.get(interaction.user.id);
+    if (!pending) { await interaction.editReply({ content: '❌ Session expirée, relance /modif.' }); return; }
+    pendingShop.delete(interaction.user.id);
+
+    const shopChannel = await client.channels.fetch(pending.channelId);
+    let targetMsg;
+    try {
+      targetMsg = await shopChannel.messages.fetch(pending.messageId);
+    } catch {
+      await interaction.editReply({ content: '❌ Message introuvable.' }); return;
+    }
+
+    const oldEmbed = targetMsg.embeds[0];
+    if (!oldEmbed) { await interaction.editReply({ content: '❌ Embed introuvable sur ce message.' }); return; }
+
+    const nomRaw   = interaction.fields.getTextInputValue('asset_nom').trim();
+    const descRaw  = interaction.fields.getTextInputValue('asset_desc').trim();
+    const prixRaw  = interaction.fields.getTextInputValue('asset_prix').trim();
+    const typeRaw  = interaction.fields.getTextInputValue('asset_type').toLowerCase().trim();
+    const mediaRaw = interaction.fields.getTextInputValue('asset_media').trim();
+
+    // Récupère les valeurs actuelles depuis l'embed
+    const oldNom   = oldEmbed.title?.replace(/^.+? — /, '') ?? '';
+    const oldDesc  = oldEmbed.fields?.find(f => f.name === '📝 Description')?.value ?? '';
+    const oldPrix  = oldEmbed.fields?.find(f => f.name === '💰 Prix')?.value ?? '';
+    const oldType  = oldEmbed.fields?.find(f => f.name === '🗂️ Type')?.value ?? '';
+    const oldMedia = oldEmbed.image?.url ?? '';
+
+    // Validation type si fourni
+    if (typeRaw && !ASSET_TYPE_ICONS[typeRaw]) {
+      await interaction.editReply({ content: '❌ Type invalide. Utilise : `build`, `ui`, `script` ou `animation`.' }); return;
+    }
+
+    const newNom      = nomRaw  || oldNom;
+    const newDesc     = descRaw || oldDesc;
+    const newPrix     = prixRaw || oldPrix;
+    const newMedia    = mediaRaw || oldMedia;
+    const newTypeRaw  = typeRaw || Object.entries(ASSET_TYPE_ICONS).find(([, v]) => v === oldType)?.[0] || 'build';
+    const newTypeLabel = ASSET_TYPE_ICONS[newTypeRaw];
+
+    const updatedEmbed = buildAssetEmbed(newNom, newDesc, newPrix, newTypeLabel, newMedia);
+    updatedEmbed.setColor(oldEmbed.color ?? 0x5865F2);
+
+    await targetMsg.edit({ embeds: [updatedEmbed] });
+    await interaction.editReply({ content: `✅ Asset **${newNom}** mis à jour avec succès !` });
+    return;
+  }
+
+  // ── Bouton Acheter ────────────────────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'acheter_asset') {
+    const embed    = interaction.message.embeds[0];
+    const assetNom = embed?.title?.replace(/^.+? — /, '') ?? 'Asset inconnu';
+
+    const modal = new ModalBuilder()
+      .setCustomId('modal_achat_asset')
+      .setTitle(`🛒 Acheter — ${assetNom.slice(0, 40)}`);
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('achat_pseudo_roblox').setLabel('Ton pseudo Roblox').setStyle(TextInputStyle.Short).setPlaceholder('Ex: MonPseudo123').setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('achat_moyen_paiement').setLabel('Moyen de paiement').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Robux, PayPal, carte...').setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('achat_message').setLabel('Message / infos supplémentaires').setStyle(TextInputStyle.Paragraph).setPlaceholder('Questions, précisions, usage prévu...').setRequired(false)
+      ),
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // ── Modal achat soumis ────────────────────────────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_achat_asset') {
+    await interaction.deferReply({ ephemeral: true });
+
+    const user          = interaction.user;
+    const guild         = interaction.guild;
+    const pseudoRoblox  = interaction.fields.getTextInputValue('achat_pseudo_roblox');
+    const moyenPaiement = interaction.fields.getTextInputValue('achat_moyen_paiement');
+    const messageClient = interaction.fields.getTextInputValue('achat_message') || '*Aucun*';
+
+    // Anti-doublon
+    const existing = guild.channels.cache.find(c =>
+      c.name.startsWith(`achat-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 15)}`) &&
+      c.type === ChannelType.GuildText
+    );
+    if (existing) {
+      await interaction.editReply({ content: `❌ Tu as déjà un ticket d'achat ouvert : ${existing}` }); return;
+    }
+
+    const ticketChannel = await guild.channels.create({
+      name: `achat-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}`,
+      type: ChannelType.GuildText,
+      parent: CONFIG.ACHAT_CATEGORY_ID,
+      permissionOverwrites: [
+        { id: guild.roles.everyone,   deny:  [PermissionFlagsBits.ViewChannel] },
+        { id: user.id,                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.VENDEUR_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+      ],
+    });
+
+    await ticketChannel.send({
+      content: `👋 <@${user.id}> | <@&${CONFIG.VENDEUR_ROLE_ID}>`,
+      embeds: [new EmbedBuilder()
+        .setTitle(`🛒 Demande d'achat — ${user.username}`)
+        .setColor(0x57F287)
+        .addFields(
+          { name: '👤 Acheteur',          value: `<@${user.id}>`, inline: true  },
+          { name: '🎮 Pseudo Roblox',     value: pseudoRoblox,    inline: true  },
+          { name: '💳 Moyen de paiement', value: moyenPaiement,   inline: true  },
+          { name: '💬 Message',           value: messageClient,   inline: false },
+        )
+        .setFooter({ text: 'HEO Studio • Boutique' })
+        .setTimestamp()],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('achat_fermer').setLabel('🔒 Fermer le ticket').setStyle(ButtonStyle.Secondary),
+      )],
+    });
+
+    await interaction.editReply({ content: `✅ Ton ticket d'achat a été créé : ${ticketChannel}` });
+    return;
+  }
+
+  // ── Fermer ticket achat ───────────────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'achat_fermer') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.VENDEUR_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au rôle vendeur.', ephemeral: true }); return;
+    }
+    await interaction.deferUpdate();
+    const channel = interaction.channel;
+
+    for (const [id] of channel.permissionOverwrites.cache) {
+      if (id !== interaction.guild.roles.everyone.id && id !== CONFIG.VENDEUR_ROLE_ID) {
+        await channel.permissionOverwrites.edit(id, { ViewChannel: false, SendMessages: false });
+      }
+    }
+
+    await interaction.message.edit({
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('achat_fermer').setLabel('🔒 Fermé').setStyle(ButtonStyle.Secondary).setDisabled(true),
+      )],
+    });
+    await channel.send({
+      embeds: [new EmbedBuilder()
+        .setColor(0x99AAB5)
+        .setDescription(`🔒 Ticket **fermé** par <@${interaction.user.id}>\nTicket conservé comme archive.`)],
+    });
+    return;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // ─── SUPPORT ────────────────────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+
   // ── Sélecteur support ─────────────────────────────────────────────────────────
   if (interaction.isStringSelectMenu() && interaction.customId === 'select_support') {
     const type = interaction.values[0];
     const modals = {
-      question:   { title: '❓ Poser une question',    fields: [
-        { id: 'sujet',   label: 'Sujet',       short: true,  placeholder: 'Ex: Délais, paiements...' },
-        { id: 'message', label: 'Ta question',  short: false, placeholder: 'Décris ta question en détail...' },
+      question:   { title: '❓ Poser une question',   fields: [
+        { id: 'sujet',   label: 'Sujet',      short: true,  placeholder: 'Ex: Délais, paiements...' },
+        { id: 'message', label: 'Ta question', short: false, placeholder: 'Décris ta question en détail...' },
       ]},
-      suggestion: { title: '💡 Faire une suggestion',  fields: [
+      suggestion: { title: '💡 Faire une suggestion', fields: [
         { id: 'sujet',   label: 'Titre de la suggestion', short: true,  placeholder: 'Ex: Ajouter une fonctionnalité...' },
-        { id: 'message', label: 'Description',           short: false, placeholder: 'Décris ta suggestion en détail...' },
+        { id: 'message', label: 'Description',            short: false, placeholder: 'Décris ta suggestion en détail...' },
       ]},
-      report:     { title: '🚨 Signaler un problème',  fields: [
-        { id: 'sujet',   label: 'Qui ou quoi signaler ?',      short: true,  placeholder: 'Ex: Pseudo du joueur, bug...' },
-        { id: 'message', label: 'Description + preuves',       short: false, placeholder: 'Décris le problème, ajoute des preuves si possible...' },
+      report:     { title: '🚨 Signaler un problème', fields: [
+        { id: 'sujet',   label: 'Qui ou quoi signaler ?', short: true,  placeholder: 'Ex: Pseudo du joueur, bug...' },
+        { id: 'message', label: 'Description + preuves',  short: false, placeholder: 'Décris le problème, ajoute des preuves si possible...' },
       ]},
     };
     const modalDef = modals[type];
@@ -339,9 +647,9 @@ client.on('interactionCreate', async (interaction) => {
       type: ChannelType.GuildText,
       parent: CONFIG.CATEGORIES.SUPPORT,
       permissionOverwrites: [
-        { id: guild.roles.everyone,   deny: [PermissionFlagsBits.ViewChannel] },
-        { id: user.id,                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: CONFIG.STAFF_ROLE_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
+        { id: user.id,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.STAFF_ROLE_ID,  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
       ],
     });
 
@@ -351,8 +659,8 @@ client.on('interactionCreate', async (interaction) => {
         .setTitle(`${typeInfo.label} — ${sujet}`)
         .setColor(typeInfo.color)
         .addFields(
-          { name: '👤 Membre',   value: `<@${user.id}>`, inline: true },
-          { name: '📝 Message',  value: message,          inline: false },
+          { name: '👤 Membre',  value: `<@${user.id}>`, inline: true },
+          { name: '📝 Message', value: message,          inline: false },
         )
         .setFooter({ text: 'HEO Studio • Support' })
         .setTimestamp()],
@@ -409,6 +717,10 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.reply({ content: '✅ Suppression annulée.', ephemeral: true }); return;
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // ─── CONTRATS ───────────────────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+
   // ── Créer un contrat ──────────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'creer_contrat') {
     const modal = new ModalBuilder().setCustomId('modal_contrat').setTitle('Nouvelle demande de contrat');
@@ -443,10 +755,10 @@ client.on('interactionCreate', async (interaction) => {
       type: ChannelType.GuildText,
       parent: CONFIG.CATEGORIES.NEGOCIATION,
       permissionOverwrites: [
-        { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
-        { id: user.id,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: CONFIG.STAFF_ROLE_ID,  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
-        { id: CONFIG.DEV_ROLE_ID,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: guild.roles.everyone, deny:  [PermissionFlagsBits.ViewChannel] },
+        { id: user.id,              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        { id: CONFIG.DEV_ROLE_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
       ],
     });
 
@@ -475,9 +787,9 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferUpdate();
     await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[etapePrecedente].id], { lockPermissions: false });
     ticketEtapes.set(channel.id, etapePrecedente);
-    const info         = ticketInfos.get(channel.id);
-    const assignment   = ticketDevAssignment.get(channel.id) ?? null;
-    const clientUser   = await client.users.fetch(info.clientId);
+    const info       = ticketInfos.get(channel.id);
+    const assignment = ticketDevAssignment.get(channel.id) ?? null;
+    const clientUser = await client.users.fetch(info.clientId);
     const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, clientUser, etapePrecedente, assignment)
       .setColor(CONFIG.ETAPES[etapePrecedente].color);
     await interaction.message.edit({ embeds: [updatedEmbed], components: [buildStaffRow(etapePrecedente)] });
@@ -516,8 +828,8 @@ client.on('interactionCreate', async (interaction) => {
 
   // ── Formulaire assignation : sélection des types ──────────────────────────────
   if (interaction.isStringSelectMenu() && interaction.customId === 'dev_form_types') {
-    const channel  = interaction.channel;
-    const pending  = pendingDevForm.get(channel.id);
+    const channel = interaction.channel;
+    const pending = pendingDevForm.get(channel.id);
     if (!pending) { await interaction.reply({ content: '❌ Formulaire expiré.', ephemeral: true }); return; }
     pending.types = interaction.values;
     pendingDevForm.set(channel.id, pending);
@@ -696,7 +1008,7 @@ client.on('interactionCreate', async (interaction) => {
     const formMsg = await channel.messages.fetch(pending.formMessageId).catch(() => null);
     if (formMsg) await formMsg.delete().catch(() => {});
 
-    const typesLabel = pending.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ');
+    const typesLabel      = pending.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ');
     const warningNotFound = notFound.length > 0
       ? `\n\n⚠️ Pseudos non trouvés : ${notFound.map(p => `\`${p}\``).join(', ')}` : '';
 
@@ -785,28 +1097,13 @@ client.on('interactionCreate', async (interaction) => {
       .setTitle('📩 Candidature Dev — HEO Studio');
     modal.addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('type_dev')
-          .setLabel('Type de développeur')
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder('Ex: UI, Scripting, Builder, Animation (ou plusieurs)')
-          .setRequired(true)
+        new TextInputBuilder().setCustomId('type_dev').setLabel('Type de développeur').setStyle(TextInputStyle.Short).setPlaceholder('Ex: UI, Scripting, Builder, Animation (ou plusieurs)').setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('disponibilite')
-          .setLabel('Disponibilité (jours / horaires)')
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder('Ex: Lun-Ven 18h-22h, Week-end toute la journée...')
-          .setRequired(true)
+        new TextInputBuilder().setCustomId('disponibilite').setLabel('Disponibilité (jours / horaires)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Lun-Ven 18h-22h, Week-end toute la journée...').setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('paiement')
-          .setLabel('Type de paiement souhaité')
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder('Ex: Robux, €, % sur projet...')
-          .setRequired(true)
+        new TextInputBuilder().setCustomId('paiement').setLabel('Type de paiement souhaité').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Robux, €, % sur projet...').setRequired(true)
       ),
     );
     await interaction.showModal(modal);
@@ -822,7 +1119,6 @@ client.on('interactionCreate', async (interaction) => {
     const user          = interaction.user;
     const guild         = interaction.guild;
 
-    // Anti-doublon
     const existing = guild.channels.cache.find(c =>
       c.name === `recrut-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}` &&
       c.type === ChannelType.GuildText
@@ -837,9 +1133,9 @@ client.on('interactionCreate', async (interaction) => {
       type: ChannelType.GuildText,
       parent: CONFIG.RECRUTEMENT_CATEGORY_ID,
       permissionOverwrites: [
-        { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
-        { id: user.id,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-        { id: CONFIG.STAFF_ROLE_ID,  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        { id: guild.roles.everyone, deny:  [PermissionFlagsBits.ViewChannel] },
+        { id: user.id,              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
       ],
     });
 
@@ -849,10 +1145,10 @@ client.on('interactionCreate', async (interaction) => {
         .setTitle(`📩 Candidature — ${user.username}`)
         .setColor(0x5865F2)
         .addFields(
-          { name: '👤 Candidat',         value: `<@${user.id}>`,  inline: true  },
-          { name: '🛠️ Type de dev',       value: typeDev,          inline: true  },
-          { name: '🕐 Disponibilité',     value: disponibilite,    inline: false },
-          { name: '💰 Paiement souhaité', value: paiement,         inline: true  },
+          { name: '👤 Candidat',         value: `<@${user.id}>`, inline: true  },
+          { name: '🛠️ Type de dev',       value: typeDev,         inline: true  },
+          { name: '🕐 Disponibilité',     value: disponibilite,   inline: false },
+          { name: '💰 Paiement souhaité', value: paiement,        inline: true  },
         )
         .setFooter({ text: 'HEO Studio • Recrutement' })
         .setTimestamp()],
@@ -874,7 +1170,6 @@ client.on('interactionCreate', async (interaction) => {
     }
     await interaction.deferUpdate();
     const channel = interaction.channel;
-
     const disabledRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('recrut_accepter').setLabel('✅ Accepter').setStyle(ButtonStyle.Success).setDisabled(true),
       new ButtonBuilder().setCustomId('recrut_refuser').setLabel('❌ Refusé').setStyle(ButtonStyle.Danger).setDisabled(true),
@@ -898,7 +1193,6 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferUpdate();
     const channel = interaction.channel;
 
-    // Désactive les boutons accepter/refuser
     const disabledRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('recrut_accepter').setLabel('✅ Accepté').setStyle(ButtonStyle.Success).setDisabled(true),
       new ButtonBuilder().setCustomId('recrut_refuser').setLabel('❌ Refuser').setStyle(ButtonStyle.Danger).setDisabled(true),
@@ -934,7 +1228,7 @@ client.on('interactionCreate', async (interaction) => {
 
   // ── Select : types retenus ────────────────────────────────────────────────────
   if (interaction.isStringSelectMenu() && interaction.customId === 'recrut_select_types') {
-    const channel = interaction.channel;
+    const channel  = interaction.channel;
     const existing = pendingRecrutement.get(channel.id) ?? {};
     existing.types = interaction.values;
     pendingRecrutement.set(channel.id, existing);
@@ -956,7 +1250,6 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferUpdate();
     await interaction.message.delete().catch(() => {});
 
-    // Un sélecteur d'étoiles par type retenu (max 5 rows = max 4 types + 1 bouton ✅)
     const rows = [];
     for (const type of pending.types) {
       const label = DEV_TYPE_ICONS[type] ?? type;
@@ -1013,14 +1306,12 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.followUp({ content: '⚠️ Données manquantes, recommence.', ephemeral: true }); return;
     }
 
-    // Vérifie que chaque type a bien ses étoiles
     for (const type of pending.types) {
       if (pending.etoiles[type] === undefined) {
         await interaction.followUp({ content: `⚠️ Tu n'as pas choisi le niveau pour **${DEV_TYPE_ICONS[type] ?? type}**.`, ephemeral: true }); return;
       }
     }
 
-    // Retrouve le candidat depuis l'embed
     const messages    = await channel.messages.fetch({ limit: 30 });
     const embedMsg    = messages.find(m => m.author.id === client.user.id && m.embeds?.[0]?.title?.startsWith('📩 Candidature'));
     const candidateId = embedMsg?.embeds?.[0]?.fields?.find(f => f.name === '👤 Candidat')?.value?.replace(/[<@>]/g, '');
@@ -1036,17 +1327,14 @@ client.on('interactionCreate', async (interaction) => {
 
     const rolesAdded = [];
 
-    // Retire rôle att entretien
     if (candidateMember.roles.cache.has(CONFIG.ROLE_ATT_ENTRETIEN)) {
       await candidateMember.roles.remove(CONFIG.ROLE_ATT_ENTRETIEN).catch(() => {});
     }
 
-    // Ajoute rôles fixes
     await candidateMember.roles.add(CONFIG.ROLE_DEV_GLOBAL).catch(() => {});
     await candidateMember.roles.add(CONFIG.ROLE_SEPARATION).catch(() => {});
     rolesAdded.push(`<@&${CONFIG.ROLE_DEV_GLOBAL}>`, `<@&${CONFIG.ROLE_SEPARATION}>`);
 
-    // Ajoute rôle type + rôle étoile
     for (const type of pending.types) {
       const typeRoleId = CONFIG.DEV_ROLES[type];
       const starIndex  = parseInt(pending.etoiles[type], 10);
@@ -1081,7 +1369,6 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
 });
 
 client.login(CONFIG.TOKEN);
