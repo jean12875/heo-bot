@@ -569,31 +569,43 @@ modal.addComponents(
 
   // ── Fermer ticket achat ───────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'achat_fermer') {
-    const member = interaction.member;
-    if (!member.roles.cache.has(CONFIG.VENDEUR_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
-      await interaction.reply({ content: '❌ Réservé au rôle vendeur.', ephemeral: true }); return;
-    }
-    await interaction.deferUpdate();
-    const channel = interaction.channel;
-
-    for (const [id] of channel.permissionOverwrites.cache) {
-      if (id !== interaction.guild.roles.everyone.id && id !== CONFIG.VENDEUR_ROLE_ID) {
-        await channel.permissionOverwrites.edit(id, { ViewChannel: false, SendMessages: false });
-      }
-    }
-
-    await interaction.message.edit({
-      components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('achat_fermer').setLabel('🔒 Fermé').setStyle(ButtonStyle.Secondary).setDisabled(true),
-      )],
-    });
-    await channel.send({
-      embeds: [new EmbedBuilder()
-        .setColor(0x99AAB5)
-        .setDescription(`🔒 Ticket **fermé** par <@${interaction.user.id}>\nTicket conservé comme archive.`)],
-    });
-    return;
+  const member = interaction.member;
+  if (!member.roles.cache.has(CONFIG.VENDEUR_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: '❌ Réservé au rôle vendeur.', ephemeral: true }); return;
   }
+  await interaction.deferUpdate();
+  const channel = interaction.channel;
+
+  // Retire l'accès à tous les membres sauf vendeur et everyone
+  const overwrites = await channel.permissionOverwrites.cache;
+  for (const [id, overwrite] of overwrites) {
+    if (id === interaction.guild.roles.everyone.id) continue;
+    if (id === CONFIG.VENDEUR_ROLE_ID) continue;
+    await channel.permissionOverwrites.edit(id, {
+      ViewChannel:       false,
+      SendMessages:      false,
+      ReadMessageHistory: false,
+    }).catch(() => {});
+  }
+
+  // Renomme le salon avec un cadenas
+  await channel.setName(`🔒-${channel.name.replace(/^🔒-/, '')}`).catch(() => {});
+
+  // Désactive le bouton
+  await interaction.message.edit({
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('achat_fermer').setLabel('🔒 Fermé').setStyle(ButtonStyle.Secondary).setDisabled(true),
+    )],
+  });
+
+  // Message de fermeture
+  await channel.send({
+    embeds: [new EmbedBuilder()
+      .setColor(0x99AAB5)
+      .setDescription(`🔒 Ce ticket est **fermé** par <@${interaction.user.id}>\nLe salon est conservé comme archive.`)],
+  });
+  return;
+}
 
   // ════════════════════════════════════════════════════════════════════════════
   // ─── SUPPORT ────────────────────────────────────────────────────────────────
