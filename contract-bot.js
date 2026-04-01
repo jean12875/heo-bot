@@ -501,33 +501,30 @@ client.on('interactionCreate', async (interaction) => {
     const assetNom = embed?.title?.replace(/^.+? — /, '') ?? 'Asset inconnu';
 
     const modal = new ModalBuilder()
-      .setCustomId('modal_achat_asset')
-      .setTitle(`🛒 Acheter — ${assetNom.slice(0, 40)}`);
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('achat_pseudo_roblox').setLabel('Nom de l'article').setStyle(TextInputStyle.Short).setPlaceholder('Ex: MonPseudo123').setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('achat_moyen_paiement').setLabel('Moyen de paiement').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Robux, PayPal, carte...').setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('achat_message').setLabel('Message / infos supplémentaires').setStyle(TextInputStyle.Paragraph).setPlaceholder('Questions, précisions, usage prévu...').setRequired(false)
-      ),
-    );
+  .setCustomId(`modal_achat_asset:${assetNom.slice(0, 90)}`)
+  .setTitle(`🛒 Acheter — ${assetNom.slice(0, 40)}`);
+modal.addComponents(
+  new ActionRowBuilder().addComponents(
+    new TextInputBuilder().setCustomId('achat_moyen_paiement').setLabel('Moyen de paiement').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Robux, PayPal, carte...').setRequired(true)
+  ),
+  new ActionRowBuilder().addComponents(
+    new TextInputBuilder().setCustomId('achat_message').setLabel('Message / infos supplémentaires').setStyle(TextInputStyle.Paragraph).setPlaceholder('Questions, précisions, usage prévu...').setRequired(false)
+  ),
+);
     await interaction.showModal(modal);
     return;
   }
 
   // ── Modal achat soumis ────────────────────────────────────────────────────────
-  if (interaction.isModalSubmit() && interaction.customId === 'modal_achat_asset') {
-    await interaction.deferReply({ ephemeral: true });
+ if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_achat_asset:')) {
+  await interaction.deferReply({ ephemeral: true });
 
-    const user          = interaction.user;
-    const guild         = interaction.guild;
-    const pseudoRoblox  = interaction.fields.getTextInputValue('achat_pseudo_roblox');
-    const moyenPaiement = interaction.fields.getTextInputValue('achat_moyen_paiement');
-    const messageClient = interaction.fields.getTextInputValue('achat_message') || '*Aucun*';
-
+  const user          = interaction.user;
+  const guild         = interaction.guild;
+  const assetNom      = interaction.customId.slice('modal_achat_asset:'.length);
+  const moyenPaiement = interaction.fields.getTextInputValue('achat_moyen_paiement');
+  const messageClient = interaction.fields.getTextInputValue('achat_message') || '*Aucun*';
+   
     // Anti-doublon
     const existing = guild.channels.cache.find(c =>
       c.name.startsWith(`achat-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 15)}`) &&
@@ -555,7 +552,7 @@ client.on('interactionCreate', async (interaction) => {
         .setColor(0x57F287)
         .addFields(
           { name: '👤 Acheteur',          value: `<@${user.id}>`, inline: true  },
-          { name: '🎮 Nom de l'article',     value: pseudoRoblox,    inline: true  },
+          { name: '🎮 Article',          value: assetNom,     inline: true },
           { name: '💳 Moyen de paiement', value: moyenPaiement,   inline: true  },
           { name: '💬 Message',           value: messageClient,   inline: false },
         )
