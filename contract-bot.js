@@ -505,7 +505,7 @@ client.on('interactionCreate', async (interaction) => {
       .setTitle(`🛒 Acheter — ${assetNom.slice(0, 40)}`);
     modal.addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('achat_pseudo_roblox').setLabel('Ton pseudo Roblox').setStyle(TextInputStyle.Short).setPlaceholder('Ex: MonPseudo123').setRequired(true)
+        new TextInputBuilder().setCustomId('achat_pseudo_roblox').setLabel('Nom de l'article').setStyle(TextInputStyle.Short).setPlaceholder('Ex: MonPseudo123').setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder().setCustomId('achat_moyen_paiement').setLabel('Moyen de paiement').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Robux, PayPal, carte...').setRequired(true)
@@ -555,7 +555,7 @@ client.on('interactionCreate', async (interaction) => {
         .setColor(0x57F287)
         .addFields(
           { name: '👤 Acheteur',          value: `<@${user.id}>`, inline: true  },
-          { name: '🎮 Pseudo Roblox',     value: pseudoRoblox,    inline: true  },
+          { name: '🎮 Nom de l'article',     value: pseudoRoblox,    inline: true  },
           { name: '💳 Moyen de paiement', value: moyenPaiement,   inline: true  },
           { name: '💬 Message',           value: messageClient,   inline: false },
         )
