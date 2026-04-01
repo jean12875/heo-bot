@@ -568,33 +568,43 @@ modal.addComponents(
   }
 
   // ── Fermer ticket achat ───────────────────────────────────────────────────────
+  
   if (interaction.isButton() && interaction.customId === 'achat_fermer') {
   const member = interaction.member;
-  if (!member.roles.cache.has(CONFIG.VENDEUR_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+  const isVendeur = member.roles.cache.has(CONFIG.VENDEUR_ROLE_ID);
+  const isAdmin   = member.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!isVendeur && !isAdmin) {
     await interaction.reply({ content: '❌ Réservé au rôle vendeur.', ephemeral: true }); return;
   }
+
   await interaction.deferUpdate();
   const channel = interaction.channel;
+  const guild   = interaction.guild;
 
-  // Retire l'accès à tous les membres sauf vendeur et everyone
-  const overwrites = await channel.permissionOverwrites.cache;
-  for (const [id, overwrite] of overwrites) {
-    if (id === interaction.guild.roles.everyone.id) continue;
-    if (id === CONFIG.VENDEUR_ROLE_ID) continue;
+  // Retire l'accès à tous sauf vendeur et @everyone
+  for (const [id] of channel.permissionOverwrites.cache) {
+    if (id === guild.id) continue;              // @everyone → on skip
+    if (id === CONFIG.VENDEUR_ROLE_ID) continue; // vendeur   → on skip
     await channel.permissionOverwrites.edit(id, {
-      ViewChannel:       false,
-      SendMessages:      false,
+      ViewChannel:        false,
+      SendMessages:       false,
       ReadMessageHistory: false,
     }).catch(() => {});
   }
 
-  // Renomme le salon avec un cadenas
-  await channel.setName(`🔒-${channel.name.replace(/^🔒-/, '')}`).catch(() => {});
+  // Renomme avec cadenas (Discord n'accepte pas les emojis dans les noms, on utilise "ferme-")
+  const newName = `🔒${channel.name.replace(/^🔒/, '')}`;
+  await channel.setName(newName).catch(() => {});
 
   // Désactive le bouton
   await interaction.message.edit({
     components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('achat_fermer').setLabel('🔒 Fermé').setStyle(ButtonStyle.Secondary).setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId('achat_fermer')
+        .setLabel('🔒 Fermé')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
     )],
   });
 
