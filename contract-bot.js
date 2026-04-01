@@ -33,7 +33,7 @@ const CONFIG = {
     builder:   '1488194780809789511',
     ui:        '1488194616413913088',
     scripteur: '1488194696831307776',
-    animateur: '1488581098563702914', // ✅ Nouveau
+    animateur: '1488581098563702914',
   },
 
   CATEGORIES: {
@@ -59,6 +59,22 @@ const CONFIG = {
     suggestion: { label: '💡 Suggestion', color: 0xF5C542 },
     report:     { label: '🚨 Report',     color: 0xED4245 },
   },
+
+  // ─── RECRUTEMENT ────────────────────────────────────────────────────────────
+  RECRUTEMENT_PANEL_CHANNEL_ID: '1488553805258821662',
+  RECRUTEMENT_CATEGORY_ID:      '1488554531217346731',
+  ROLE_ATT_ENTRETIEN:           '1485313117603893348',
+  ROLE_DEV_GLOBAL:              '1485191413829337299',
+  ROLE_SEPARATION:              '1485191413829337293',
+
+  // Index 0 = 5 étoiles … index 4 = 1 étoile
+  ETOILES_ROLES: {
+    ui:        ['1485321773665751141','1485321825834766587','1485321711158038841','1485321660138524763','1485320858624065757'],
+    builder:   ['1485322061994786918','1485321763985293392','1485321427845648385','1485321015721591024','1485320049073061952'],
+    animateur: ['1488587193932058654','1488587312269885590','1488587339105308752','1488587372319871197','1488587400518041612'],
+    scripteur: ['1485321122646851735','1485321178859180165','1485321077495300298','1485321012709953717','1488194696831307776'],
+  },
+  // ────────────────────────────────────────────────────────────────────────────
 };
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -67,6 +83,7 @@ const ticketEtapes        = new Map();
 const ticketInfos         = new Map();
 const ticketDevAssignment = new Map();
 const pendingDevForm      = new Map();
+const pendingRecrutement  = new Map(); // { types: [], etoiles: { ui: '0', ... } }
 // ──────────────────────────────────────────────────────────────────────────────
 
 // ✅ Icônes par type de dev
@@ -102,6 +119,7 @@ async function registerSlashCommands() {
 // ─── SETUP ────────────────────────────────────────────────────────────────────
 if (process.argv[2] === 'setup') {
   client.once('ready', async () => {
+    // Panel contrats
     const contractChannel = await client.channels.fetch(CONFIG.PANEL_CHANNEL_ID);
     await contractChannel.send({
       embeds: [new EmbedBuilder()
@@ -114,6 +132,7 @@ if (process.argv[2] === 'setup') {
       )],
     });
 
+    // Panel support
     const supportChannel = await client.channels.fetch(CONFIG.SUPPORT_PANEL_CHANNEL_ID);
     await supportChannel.send({
       embeds: [new EmbedBuilder()
@@ -130,6 +149,22 @@ if (process.argv[2] === 'setup') {
             new StringSelectMenuOptionBuilder().setLabel('💡 Suggestion').setDescription('Tu as une idée à soumettre').setValue('suggestion'),
             new StringSelectMenuOptionBuilder().setLabel('🚨 Report').setDescription('Signaler un problème ou un joueur').setValue('report'),
           )
+      )],
+    });
+
+    // Panel recrutement
+    const recrutChannel = await client.channels.fetch(CONFIG.RECRUTEMENT_PANEL_CHANNEL_ID);
+    await recrutChannel.send({
+      embeds: [new EmbedBuilder()
+        .setTitle('🖥️ HEO Studio — Recrutement Dev')
+        .setDescription(
+          'Tu souhaites rejoindre l\'équipe de développement **HEO Studio** ?\n\n' +
+          'Clique sur le bouton ci-dessous pour ouvrir ta candidature.\nUn salon privé sera créé pour toi et notre équipe.'
+        )
+        .setColor(0x5865F2)
+        .setFooter({ text: 'HEO Studio • Recrutement' })],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('creer_recrutement').setLabel('📩 Postuler').setStyle(ButtonStyle.Primary)
       )],
     });
 
@@ -156,13 +191,9 @@ function buildEmbed(nom, description, budget, delai, user, etapeIndex, devAssign
 
   if (devAssignment) {
     const typesLabel = devAssignment.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ');
-
-    // ✅ Icône 🔨 devant chaque dev assigné
     const assignesStr = devAssignment.assignes.length > 0
       ? devAssignment.assignes.map(id => `🔨 <@${id}>`).join('\n')
       : '*Aucun*';
-
-    // ✅ Icône 🔧 devant chaque backup
     const backupStr = devAssignment.backup.length > 0
       ? devAssignment.backup.map(id => `🔧 <@${id}>`).join('\n')
       : '*Aucun*';
@@ -210,28 +241,12 @@ async function sendFormEtape1(channel, selectedTypes = []) {
     .setCustomId('dev_form_types')
     .setPlaceholder('Sélectionne le(s) type(s) de dev retenus...')
     .setMinValues(1)
-    .setMaxValues(4) // ✅ 4 types
+    .setMaxValues(4)
     .addOptions(
-      new StringSelectMenuOptionBuilder()
-        .setLabel('🏗️ Builder')
-        .setDescription('Constructeur de maps / structures')
-        .setValue('builder')
-        .setDefault(selectedTypes.includes('builder')),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('💻 Scripteur')
-        .setDescription('Développeur de scripts / systèmes')
-        .setValue('scripteur')
-        .setDefault(selectedTypes.includes('scripteur')),
-      new StringSelectMenuOptionBuilder()
-        .setLabel('🎨 UI')
-        .setDescription('Designer d\'interfaces')
-        .setValue('ui')
-        .setDefault(selectedTypes.includes('ui')),
-      new StringSelectMenuOptionBuilder() // ✅ Nouveau
-        .setLabel('💨 Animateur')
-        .setDescription('Animateur : animation')
-        .setValue('animateur')
-        .setDefault(selectedTypes.includes('animateur')),
+      new StringSelectMenuOptionBuilder().setLabel('🏗️ Builder').setDescription('Constructeur de maps / structures').setValue('builder').setDefault(selectedTypes.includes('builder')),
+      new StringSelectMenuOptionBuilder().setLabel('💻 Scripteur').setDescription('Développeur de scripts / systèmes').setValue('scripteur').setDefault(selectedTypes.includes('scripteur')),
+      new StringSelectMenuOptionBuilder().setLabel('🎨 UI').setDescription('Designer d\'interfaces').setValue('ui').setDefault(selectedTypes.includes('ui')),
+      new StringSelectMenuOptionBuilder().setLabel('💨 Animateur').setDescription('Animateur : animation').setValue('animateur').setDefault(selectedTypes.includes('animateur')),
     );
 
   const row1 = new ActionRowBuilder().addComponents(select);
@@ -431,7 +446,6 @@ client.on('interactionCreate', async (interaction) => {
         { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
         { id: user.id,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
         { id: CONFIG.STAFF_ROLE_ID,  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
-        // Tous les devs voient la négociation
         { id: CONFIG.DEV_ROLE_ID,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
       ],
     });
@@ -481,7 +495,6 @@ client.on('interactionCreate', async (interaction) => {
     const nouvelleEtape = etapeActuelle + 1;
     if (nouvelleEtape >= CONFIG.ETAPES.length) { await interaction.reply({ content: '✅ Déjà à l\'étape finale.', ephemeral: true }); return; }
 
-    // ── Interception NÉGOCIATION → PAIEMENT_1 : formulaire d'assignation ─────
     if (etapeActuelle === 0) {
       await interaction.deferUpdate();
       const formMsg = await sendFormEtape1(channel, []);
@@ -489,7 +502,6 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // ── Avancement normal ─────────────────────────────────────────────────────
     await interaction.deferUpdate();
     await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id], { lockPermissions: false });
     ticketEtapes.set(channel.id, nouvelleEtape);
@@ -539,7 +551,6 @@ client.on('interactionCreate', async (interaction) => {
     if (pending.types.length === 0) {
       await interaction.reply({ content: '⚠️ Sélectionne au moins un type de dev avant de continuer.', ephemeral: true }); return;
     }
-
     await interaction.deferUpdate();
     await interaction.message.delete().catch(() => {});
 
@@ -642,37 +653,28 @@ client.on('interactionCreate', async (interaction) => {
     ticketDevAssignment.set(channel.id, assignment);
     pendingDevForm.delete(channel.id);
 
-    // ✅ Retire l'accès au rôle global dev
     await channel.permissionOverwrites.delete(CONFIG.DEV_ROLE_ID).catch(() => {});
 
-    // ✅ Retire les types NON sélectionnés
     for (const [type, roleId] of Object.entries(CONFIG.DEV_ROLES)) {
       if (!pending.types.includes(type)) {
         await channel.permissionOverwrites.delete(roleId).catch(() => {});
       }
     }
 
-    // ✅ Garde les types SÉLECTIONNÉS (backup inclus automatiquement)
     for (const type of pending.types) {
       const roleId = CONFIG.DEV_ROLES[type];
       if (!roleId) continue;
       await channel.permissionOverwrites.edit(roleId, {
-        ViewChannel: true,
-        SendMessages: true,
-        ReadMessageHistory: true,
+        ViewChannel: true, SendMessages: true, ReadMessageHistory: true,
       }).catch(() => {});
     }
 
-    // Donne les permissions aux devs assignés individuellement
     for (const userId of assignesIds) {
       await channel.permissionOverwrites.edit(userId, {
-        ViewChannel: true,
-        SendMessages: true,
-        ReadMessageHistory: true,
+        ViewChannel: true, SendMessages: true, ReadMessageHistory: true,
       }).catch(() => {});
     }
 
-    // ✅ FIX bouton affichage : génère le bon row AVANT d'éditer le message
     const nouvelleEtape = 1;
     await channel.setParent(CONFIG.CATEGORIES[CONFIG.ETAPES[nouvelleEtape].id], { lockPermissions: false });
     ticketEtapes.set(channel.id, nouvelleEtape);
@@ -680,9 +682,8 @@ client.on('interactionCreate', async (interaction) => {
     const info         = ticketInfos.get(channel.id);
     const clientUser   = await client.users.fetch(info.clientId);
     const updatedEmbed = buildEmbed(info.nom, info.description, info.budget, info.delai, clientUser, nouvelleEtape, assignment);
-    const newStaffRow  = buildStaffRow(nouvelleEtape); // ✅ Génère "➡️ Passer à : 🔨 En cours de développement"
+    const newStaffRow  = buildStaffRow(nouvelleEtape);
 
-    // ✅ Cherche le message embed principal (celui avec le bouton etape_suivante)
     const messages = await channel.messages.fetch({ limit: 50 });
     const embedMsg = messages.find(m =>
       m.author.id === client.user.id &&
@@ -692,11 +693,9 @@ client.on('interactionCreate', async (interaction) => {
     );
     if (embedMsg) await embedMsg.edit({ embeds: [updatedEmbed], components: [newStaffRow] });
 
-    // Supprime le message du formulaire étape 2
     const formMsg = await channel.messages.fetch(pending.formMessageId).catch(() => null);
     if (formMsg) await formMsg.delete().catch(() => {});
 
-    // Message de confirmation
     const typesLabel = pending.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ');
     const warningNotFound = notFound.length > 0
       ? `\n\n⚠️ Pseudos non trouvés : ${notFound.map(p => `\`${p}\``).join(', ')}` : '';
@@ -706,9 +705,9 @@ client.on('interactionCreate', async (interaction) => {
         .setColor(CONFIG.ETAPES[nouvelleEtape].color)
         .setTitle('✅ Devs assignés au projet')
         .addFields(
-          { name: '🗂️ Types retenus',  value: typesLabel,                                                        inline: false },
-          { name: '🔨 Devs assignés',  value: assignesIds.map(id => `🔨 <@${id}>`).join('\n') || '*Aucun*',     inline: true  },
-          { name: '🔧 Support/Backup', value: backupIds.map(id => `🔧 <@${id}>`).join('\n') || '*Aucun*',       inline: true  },
+          { name: '🗂️ Types retenus',  value: typesLabel,                                                    inline: false },
+          { name: '🔨 Devs assignés',  value: assignesIds.map(id => `🔨 <@${id}>`).join('\n') || '*Aucun*', inline: true  },
+          { name: '🔧 Support/Backup', value: backupIds.map(id => `🔧 <@${id}>`).join('\n') || '*Aucun*',   inline: true  },
         )
         .setDescription(`📌 Ticket avancé à l'étape : **${CONFIG.ETAPES[nouvelleEtape].label}**\nPar : <@${interaction.user.id}>${warningNotFound}`)
         .setFooter({ text: 'HEO Studio • Assignation devs' })
@@ -774,6 +773,315 @@ client.on('interactionCreate', async (interaction) => {
     await channel.send({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ Contrat **annulé** par <@${interaction.user.id}>`)] });
     return;
   }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // ─── RECRUTEMENT ────────────────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── Ouvrir candidature ────────────────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'creer_recrutement') {
+    const modal = new ModalBuilder()
+      .setCustomId('modal_recrutement')
+      .setTitle('📩 Candidature Dev — HEO Studio');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('type_dev')
+          .setLabel('Type de développeur')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: UI, Scripting, Builder, Animation (ou plusieurs)')
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('disponibilite')
+          .setLabel('Disponibilité (jours / horaires)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: Lun-Ven 18h-22h, Week-end toute la journée...')
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('paiement')
+          .setLabel('Type de paiement souhaité')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('Ex: Robux, €, % sur projet...')
+          .setRequired(true)
+      ),
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // ── Modal recrutement soumis ──────────────────────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_recrutement') {
+    await interaction.deferReply({ ephemeral: true });
+    const typeDev       = interaction.fields.getTextInputValue('type_dev');
+    const disponibilite = interaction.fields.getTextInputValue('disponibilite');
+    const paiement      = interaction.fields.getTextInputValue('paiement');
+    const user          = interaction.user;
+    const guild         = interaction.guild;
+
+    // Anti-doublon
+    const existing = guild.channels.cache.find(c =>
+      c.name === `recrut-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}` &&
+      c.type === ChannelType.GuildText
+    );
+    if (existing) {
+      await interaction.editReply({ content: `❌ Tu as déjà une candidature ouverte : ${existing}` });
+      return;
+    }
+
+    const ticketChannel = await guild.channels.create({
+      name: `recrut-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}`,
+      type: ChannelType.GuildText,
+      parent: CONFIG.RECRUTEMENT_CATEGORY_ID,
+      permissionOverwrites: [
+        { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
+        { id: user.id,               allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: CONFIG.STAFF_ROLE_ID,  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+      ],
+    });
+
+    await ticketChannel.send({
+      content: `👋 <@${user.id}> | <@&${CONFIG.STAFF_ROLE_ID}>`,
+      embeds: [new EmbedBuilder()
+        .setTitle(`📩 Candidature — ${user.username}`)
+        .setColor(0x5865F2)
+        .addFields(
+          { name: '👤 Candidat',         value: `<@${user.id}>`,  inline: true  },
+          { name: '🛠️ Type de dev',       value: typeDev,          inline: true  },
+          { name: '🕐 Disponibilité',     value: disponibilite,    inline: false },
+          { name: '💰 Paiement souhaité', value: paiement,         inline: true  },
+        )
+        .setFooter({ text: 'HEO Studio • Recrutement' })
+        .setTimestamp()],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('recrut_accepter').setLabel('✅ Accepter').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('recrut_refuser').setLabel('❌ Refuser').setStyle(ButtonStyle.Danger),
+      )],
+    });
+
+    await interaction.editReply({ content: `✅ Ta candidature a été ouverte : ${ticketChannel}` });
+    return;
+  }
+
+  // ── Refuser candidature ───────────────────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'recrut_refuser') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
+    await interaction.deferUpdate();
+    const channel = interaction.channel;
+
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('recrut_accepter').setLabel('✅ Accepter').setStyle(ButtonStyle.Success).setDisabled(true),
+      new ButtonBuilder().setCustomId('recrut_refuser').setLabel('❌ Refusé').setStyle(ButtonStyle.Danger).setDisabled(true),
+    );
+    await interaction.message.edit({ components: [disabledRow] });
+    await channel.send({
+      embeds: [new EmbedBuilder()
+        .setColor(0xED4245)
+        .setDescription(`❌ Candidature **refusée** par <@${interaction.user.id}>\nLe salon sera supprimé dans 5 secondes.`)],
+    });
+    setTimeout(() => channel.delete().catch(() => {}), 5000);
+    return;
+  }
+
+  // ── Accepter candidature → sélecteur type(s) ─────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'recrut_accepter') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
+    await interaction.deferUpdate();
+    const channel = interaction.channel;
+
+    // Désactive les boutons accepter/refuser
+    const disabledRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('recrut_accepter').setLabel('✅ Accepté').setStyle(ButtonStyle.Success).setDisabled(true),
+      new ButtonBuilder().setCustomId('recrut_refuser').setLabel('❌ Refuser').setStyle(ButtonStyle.Danger).setDisabled(true),
+    );
+    await interaction.message.edit({ components: [disabledRow] });
+
+    const selectTypes = new StringSelectMenuBuilder()
+      .setCustomId('recrut_select_types')
+      .setPlaceholder('Sélectionne le ou les types retenus...')
+      .setMinValues(1)
+      .setMaxValues(4)
+      .addOptions(
+        new StringSelectMenuOptionBuilder().setLabel('🎨 UI').setValue('ui'),
+        new StringSelectMenuOptionBuilder().setLabel('🏗️ Builder').setValue('builder'),
+        new StringSelectMenuOptionBuilder().setLabel('💨 Animateur').setValue('animateur'),
+        new StringSelectMenuOptionBuilder().setLabel('💻 Scripteur').setValue('scripteur'),
+      );
+
+    await channel.send({
+      embeds: [new EmbedBuilder()
+        .setTitle('✅ Candidature acceptée — Étape 1/2')
+        .setDescription('Sélectionne le ou les **types de dev** attribués à ce candidat.')
+        .setColor(0x57F287)],
+      components: [
+        new ActionRowBuilder().addComponents(selectTypes),
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('recrut_types_valider').setLabel('➡️ Étape suivante').setStyle(ButtonStyle.Primary),
+        ),
+      ],
+    });
+    return;
+  }
+
+  // ── Select : types retenus ────────────────────────────────────────────────────
+  if (interaction.isStringSelectMenu() && interaction.customId === 'recrut_select_types') {
+    const channel = interaction.channel;
+    const existing = pendingRecrutement.get(channel.id) ?? {};
+    existing.types = interaction.values;
+    pendingRecrutement.set(channel.id, existing);
+    await interaction.deferUpdate();
+    return;
+  }
+
+  // ── Valider types → sélecteur étoiles ────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'recrut_types_valider') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
+    const channel = interaction.channel;
+    const pending = pendingRecrutement.get(channel.id);
+    if (!pending?.types?.length) {
+      await interaction.reply({ content: '⚠️ Sélectionne au moins un type de dev.', ephemeral: true }); return;
+    }
+    await interaction.deferUpdate();
+    await interaction.message.delete().catch(() => {});
+
+    // Un sélecteur d'étoiles par type retenu (max 5 rows = max 4 types + 1 bouton ✅)
+    const rows = [];
+    for (const type of pending.types) {
+      const label = DEV_TYPE_ICONS[type] ?? type;
+      rows.push(new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`recrut_etoiles_${type}`)
+          .setPlaceholder(`Niveau pour ${label}...`)
+          .addOptions(
+            new StringSelectMenuOptionBuilder().setLabel('⭐⭐⭐⭐⭐ — 5 étoiles').setValue('0'),
+            new StringSelectMenuOptionBuilder().setLabel('⭐⭐⭐⭐ — 4 étoiles').setValue('1'),
+            new StringSelectMenuOptionBuilder().setLabel('⭐⭐⭐ — 3 étoiles').setValue('2'),
+            new StringSelectMenuOptionBuilder().setLabel('⭐⭐ — 2 étoiles').setValue('3'),
+            new StringSelectMenuOptionBuilder().setLabel('⭐ — 1 étoile').setValue('4'),
+          )
+      ));
+    }
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('recrut_etoiles_valider').setLabel('✅ Confirmer et attribuer les rôles').setStyle(ButtonStyle.Success),
+    ));
+
+    await channel.send({
+      embeds: [new EmbedBuilder()
+        .setTitle('✅ Candidature acceptée — Étape 2/2')
+        .setDescription(`Types retenus : **${pending.types.map(t => DEV_TYPE_ICONS[t] ?? t).join(', ')}**\n\nChoisis le **niveau (étoiles)** pour chaque type.`)
+        .setColor(0x57F287)],
+      components: rows,
+    });
+    return;
+  }
+
+  // ── Select : étoiles par type ─────────────────────────────────────────────────
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith('recrut_etoiles_')) {
+    const type    = interaction.customId.replace('recrut_etoiles_', '');
+    const channel = interaction.channel;
+    const pending = pendingRecrutement.get(channel.id) ?? {};
+    if (!pending.etoiles) pending.etoiles = {};
+    pending.etoiles[type] = interaction.values[0];
+    pendingRecrutement.set(channel.id, pending);
+    await interaction.deferUpdate();
+    return;
+  }
+
+  // ── Confirmer → attribuer les rôles ──────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'recrut_etoiles_valider') {
+    const member = interaction.member;
+    if (!member.roles.cache.has(CONFIG.STAFF_ROLE_ID) && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: '❌ Réservé au staff.', ephemeral: true }); return;
+    }
+    await interaction.deferUpdate();
+    const channel = interaction.channel;
+    const pending = pendingRecrutement.get(channel.id);
+
+    if (!pending?.types?.length || !pending?.etoiles) {
+      await interaction.followUp({ content: '⚠️ Données manquantes, recommence.', ephemeral: true }); return;
+    }
+
+    // Vérifie que chaque type a bien ses étoiles
+    for (const type of pending.types) {
+      if (pending.etoiles[type] === undefined) {
+        await interaction.followUp({ content: `⚠️ Tu n'as pas choisi le niveau pour **${DEV_TYPE_ICONS[type] ?? type}**.`, ephemeral: true }); return;
+      }
+    }
+
+    // Retrouve le candidat depuis l'embed
+    const messages    = await channel.messages.fetch({ limit: 30 });
+    const embedMsg    = messages.find(m => m.author.id === client.user.id && m.embeds?.[0]?.title?.startsWith('📩 Candidature'));
+    const candidateId = embedMsg?.embeds?.[0]?.fields?.find(f => f.name === '👤 Candidat')?.value?.replace(/[<@>]/g, '');
+    if (!candidateId) {
+      await interaction.followUp({ content: '❌ Impossible de retrouver le candidat dans l\'embed.', ephemeral: true }); return;
+    }
+
+    const guild           = interaction.guild;
+    const candidateMember = await guild.members.fetch(candidateId).catch(() => null);
+    if (!candidateMember) {
+      await interaction.followUp({ content: '❌ Le membre a quitté le serveur.', ephemeral: true }); return;
+    }
+
+    const rolesAdded = [];
+
+    // Retire rôle att entretien
+    if (candidateMember.roles.cache.has(CONFIG.ROLE_ATT_ENTRETIEN)) {
+      await candidateMember.roles.remove(CONFIG.ROLE_ATT_ENTRETIEN).catch(() => {});
+    }
+
+    // Ajoute rôles fixes
+    await candidateMember.roles.add(CONFIG.ROLE_DEV_GLOBAL).catch(() => {});
+    await candidateMember.roles.add(CONFIG.ROLE_SEPARATION).catch(() => {});
+    rolesAdded.push(`<@&${CONFIG.ROLE_DEV_GLOBAL}>`, `<@&${CONFIG.ROLE_SEPARATION}>`);
+
+    // Ajoute rôle type + rôle étoile
+    for (const type of pending.types) {
+      const typeRoleId = CONFIG.DEV_ROLES[type];
+      const starIndex  = parseInt(pending.etoiles[type], 10);
+      const starRoleId = CONFIG.ETOILES_ROLES[type]?.[starIndex];
+
+      if (typeRoleId) { await candidateMember.roles.add(typeRoleId).catch(() => {}); rolesAdded.push(`<@&${typeRoleId}>`); }
+      if (starRoleId) { await candidateMember.roles.add(starRoleId).catch(() => {}); rolesAdded.push(`<@&${starRoleId}>`); }
+    }
+
+    pendingRecrutement.delete(channel.id);
+    await interaction.message.delete().catch(() => {});
+
+    const typesLabel = pending.types.map(t => {
+      const starIndex = parseInt(pending.etoiles[t], 10);
+      const stars     = '⭐'.repeat(5 - starIndex);
+      return `${DEV_TYPE_ICONS[t] ?? t} — ${stars}`;
+    }).join('\n');
+
+    await channel.send({
+      content: `🎉 <@${candidateId}>`,
+      embeds: [new EmbedBuilder()
+        .setTitle('🎉 Candidature acceptée !')
+        .setColor(0x57F287)
+        .setDescription(`Bienvenue dans l'équipe **HEO Studio** <@${candidateId}> !\nTes rôles ont été attribués par <@${interaction.user.id}>.`)
+        .addFields(
+          { name: '🛠️ Types & niveaux', value: typesLabel,            inline: false },
+          { name: '🏷️ Rôles ajoutés',   value: rolesAdded.join('\n'), inline: false },
+        )
+        .setFooter({ text: 'HEO Studio • Recrutement' })
+        .setTimestamp()],
+    });
+    return;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
 });
 
 client.login(CONFIG.TOKEN);
