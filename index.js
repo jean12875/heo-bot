@@ -1441,7 +1441,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
   // ─── RECRUTEMENT ────────────────────────────────────────────────────────────
   // ════════════════════════════════════════════════════════════════════════════
 
@@ -1655,9 +1655,9 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-});
+}); // ← fermeture du client.on('interactionCreate')
 
-// ─── HELPERS NOUVEAU SYSTÈME (fonctions séparées pour /next et boutons) ────────
+// ─── HELPERS NOUVEAU SYSTÈME ──────────────────────────────────────────────────
 
 function findContratByChannel(channelId) {
   for (const [, contrat] of newContrats) {
@@ -1671,7 +1671,6 @@ function findContratByChannel(channelId) {
 async function refreshClientTicketButtons(guild, contrat) {
   const clientCh = guild.channels.cache.get(contrat.clientTicketId);
   if (!clientCh) return;
-  // Trouve le dernier message du bot avec des boutons nc_
   const msgs = await clientCh.messages.fetch({ limit: 30 });
   const botMsg = msgs.find(m =>
     m.author.id === client.user.id &&
@@ -1685,10 +1684,6 @@ async function refreshClientTicketButtons(guild, contrat) {
 
 async function handleNext(guild, contrat, user, channel) {
   if (contrat.etape === 0) {
-    // Ouvre le modal pour entrer les devs — impossible depuis une fonction async sans interaction
-    // On doit gérer ça directement dans le handler bouton / slash
-    // Mais pour /next slash, on ne peut pas showModal sans interaction initiale
-    // On envoie un message indiquant de cliquer sur le bouton à la place
     await channel.send({
       embeds: [new EmbedBuilder().setColor(0xF5C542).setDescription('⚠️ Pour passer à l\'étape 1, utilise le bouton **➡️ Dev choisi** dans le ticket pour renseigner le nom du dev.')],
     });
@@ -1714,7 +1709,6 @@ async function handleNext(guild, contrat, user, channel) {
 
   await sendToBothTickets(guild, contrat, '', messages[contrat.etape] ?? { color: 0x57F287, desc: `Étape ${contrat.etape}` });
 
-  // Étape 4 : ping owner pour payer le dev + bouton dans ticket dev
   if (contrat.etape === 4) {
     const devCh = guild.channels.cache.get(contrat.devTicketId);
     if (devCh) {
@@ -1724,7 +1718,6 @@ async function handleNext(guild, contrat, user, channel) {
         components: buildDevTicketRow(4),
       });
     }
-    // Renomme ticket client avec ✅
     const clientCh = guild.channels.cache.get(contrat.clientTicketId);
     if (clientCh) await renameChannelPrefix(clientCh, '✅').catch(() => {});
   }
@@ -1740,7 +1733,6 @@ async function handleBack(guild, contrat, user, channel) {
 
   const etapePrecedente = contrat.etape - 1;
 
-  // Si on revient de l'étape 1 à 0 : supprime le ticket dev
   if (contrat.etape === 1 && contrat.devTicketId) {
     const devCh = guild.channels.cache.get(contrat.devTicketId);
     if (devCh) await devCh.delete().catch(() => {});
@@ -1748,14 +1740,12 @@ async function handleBack(guild, contrat, user, channel) {
     contrat.devIds      = [];
   }
 
-  // Si on revient de l'étape 5 à 4 : supprime le ticket paiement secrétaire
   if (contrat.etape === 5 && contrat.paySecretaireTicketId) {
     const payCh = guild.channels.cache.get(contrat.paySecretaireTicketId);
     if (payCh) await payCh.delete().catch(() => {});
     contrat.paySecretaireTicketId = null;
   }
 
-  // Retire le ✅ du ticket client si on revient depuis l'étape 4
   if (contrat.etape === 4) {
     const clientCh = guild.channels.cache.get(contrat.clientTicketId);
     if (clientCh) {
@@ -1771,53 +1761,5 @@ async function handleBack(guild, contrat, user, channel) {
   await sendToBothTickets(guild, contrat, '', { color: 0x99AAB5, desc: `🔙 Retour à l'étape **${etapePrecedente + 1}/6** par <@${user.id}>` });
   await refreshClientTicketButtons(guild, contrat);
 }
-
-// ─── Ouvre le modal "devs" depuis le bouton nc_next à l'étape 0 ──────────────
-// (Séparé ici car showModal doit être appelé directement sur l'interaction)
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton() || interaction.customId !== 'nc_next_etape0') return;
-  if (!canSecretaire(interaction.member)) {
-    await interaction.reply({ content: '❌ Réservé au secrétaire / owner.', ephemeral: true }); return;
-  }
-  const contrat = findContratByChannel(interaction.channelId);
-  if (!contrat || contrat.etape !== 0) return;
-
-  pendingNewDev.set(interaction.user.id, { categoryId: contrat.categoryId });
-
-  const modal = new ModalBuilder().setCustomId('nc_modal_devs').setTitle('👷 Choisir le développeur');
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('dev_pseudos').setLabel('Pseudo(s) du ou des développeurs').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Jean, Marc (sépare par des virgules)').setRequired(true)
-    ),
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('dev_infos').setLabel('Informations supplémentaires').setStyle(TextInputStyle.Paragraph).setPlaceholder('Détails, consignes, notes pour le dev...').setRequired(false)
-    ),
-  );
-  await interaction.showModal(modal);
-});
-
-// ─── Override du bouton nc_next à l'étape 0 pour ouvrir le modal ──────────────
-// On intercepte nc_next AVANT le handler générique pour l'étape 0
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton() || interaction.customId !== 'nc_next') return;
-  const contrat = findContratByChannel(interaction.channelId);
-  if (!contrat || contrat.etape !== 0) return;
-  if (!canSecretaire(interaction.member)) {
-    await interaction.reply({ content: '❌ Réservé au secrétaire / owner.', ephemeral: true }); return;
-  }
-
-  pendingNewDev.set(interaction.user.id, { categoryId: contrat.categoryId });
-
-  const modal = new ModalBuilder().setCustomId('nc_modal_devs').setTitle('👷 Choisir le développeur');
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('dev_pseudos').setLabel('Pseudo(s) du ou des développeurs').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Jean, Marc (sépare par des virgules)').setRequired(true)
-    ),
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('dev_infos').setLabel('Informations supplémentaires').setStyle(TextInputStyle.Paragraph).setPlaceholder('Détails, consignes, notes pour le dev...').setRequired(false)
-    ),
-  );
-  await interaction.showModal(modal);
-});
 
 client.login(CONFIG.TOKEN);
