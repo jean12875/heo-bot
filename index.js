@@ -78,10 +78,7 @@ const CONFIG = {
   NEW_DEV_ROLE_ID:           '1485191413829337299',
   NEW_STAFF_ROLE_ID:         '1485191413829337297',
 
-  // Emojis des étapes (préfixes catégorie)
-  // FIX BUG 4 : on stocke aussi les préfixes bruts pour le nettoyage
-  ETAPE_EMOJIS: ['🟡', '1💳', '🛠️', '2💳', '💰', '✅'],
-  // index :        0      1       2       3       4     5
+  ETAPE_EMOJIS: ['🟡', '1️⃣💳', '🛠️', '2️⃣💳', '💰', '✅'],
   ETAPE_ANNULE: '🛑',
 };
 // ──────────────────────────────────────────────────────────────────────────────
@@ -95,8 +92,10 @@ const pendingRecrutement  = new Map();
 const pendingShop         = new Map();
 
 // ─── STATE (nouveau système) ──────────────────────────────────────────────────
-const newContrats = new Map();
-const pendingNewDev = new Map();
+// FIX : on stocke aussi l'ID du message principal du ticket client pour pouvoir
+// l'éditer proprement sans chercher dans les 30 derniers messages.
+const newContrats   = new Map(); // categoryId → contratData
+const pendingNewDev = new Map(); // userId → { categoryId }
 // ──────────────────────────────────────────────────────────────────────────────
 
 const DEV_TYPE_ICONS = {
@@ -126,11 +125,10 @@ function canOwner(member) {
     || member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
-// ── FIX BUG 4 : Nettoyage robuste du nom de catégorie ────────────────────────
-// Supprime TOUT préfixe connu (emojis étapes + annulé) suivi d'un tiret
-function stripCategoryPrefix(name) {
-  // Supprime tout ce qui précède le premier tiret (le préfixe emoji)
-  // Gère : 🟡-nom, 1💳-nom, 🛠️-nom, 2💳-nom, 💰-nom, ✅-nom, 🛑-nom
+// ── Nettoyage robuste du nom (catégorie ou salon) ─────────────────────────────
+// Supprime tout préfixe emoji + tiret en tête, quel que soit le préfixe.
+function stripPrefix(name) {
+  // Retire tout ce qui précède le 1er caractère alphanumérique (latin ou étendu)
   return name.replace(/^[^a-zA-Z0-9\u00C0-\u024F]+[-\s]*/u, '').trim();
 }
 
@@ -138,32 +136,75 @@ function stripCategoryPrefix(name) {
 async function renameCategoryEmoji(guild, categoryId, etape, annule = false) {
   const category = guild.channels.cache.get(categoryId);
   if (!category) return;
-  const nomSansPrefix = stripCategoryPrefix(category.name);
+  const nomSansPrefix = stripPrefix(category.name);
   const emoji = annule ? CONFIG.ETAPE_ANNULE : (CONFIG.ETAPE_EMOJIS[etape] ?? '✅');
   await category.setName(`${emoji}-${nomSansPrefix}`).catch(() => {});
 }
 
-// ── FIX BUG 4 (canaux) : même logique de nettoyage ───────────────────────────
-function stripChannelPrefix(name) {
-  return name.replace(/^[^a-zA-Z0-9\u00C0-\u024F]+[-\s]*/u, '').trim();
-}
-
-// Renomme un salon en ajoutant/retirant un emoji préfixe
+// Renomme un salon avec un nouveau préfixe (retire l'ancien proprement)
 async function renameChannelPrefix(channel, prefix) {
   if (!channel) return;
-  const nomSansPrefix = stripChannelPrefix(channel.name);
+  const nomSansPrefix = stripPrefix(channel.name);
   await channel.setName(`${prefix}-${nomSansPrefix}`).catch(() => {});
 }
 
-// Envoie un message dans les deux tickets (client + dev)
+// ── Labels des étapes (nouveau système) ──────────────────────────────────────
+const NC_ETAPE_LABELS = [
+  '🟡 Négociation',
+  '1️⃣💳 1er paiement en attente',
+  '🛠️ Développement en cours',
+  '2️⃣💳 2ème paiement en attente',
+  '💰 Paiement dev en attente',
+  '✅ Terminé',
+];
+const NC_ETAPE_COLORS = [
+  0xF5C542,  // 0 - Négociation
+  0xFF8C00,  // 1 - 1er paiement
+  0x5865F2,  // 2 - Développement
+  0xFF8C00,  // 3 - 2ème paiement
+  0x57F287,  // 4 - Paiement dev
+  0x57F287,  // 5 - Terminé
+];
+
+// Construit l'embed principal du ticket client (mis à jour à chaque étape)
+function buildClientEmbed(contrat) {
+  const etapeLabel = NC_ETAPE_LABELS[contrat.etape] ?? '✅ Terminé';
+  const color      = contrat.annule ? 0xED4245 : (NC_ETAPE_COLORS[contrat.etape] ?? 0x57F287);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📋 Contrat — ${contrat.nom}`)
+    .setColor(color)
+    .addFields(
+      { name: '👤 Client',      value: `<@${contrat.clientId}>`, inline: true  },
+      { name: '💰 Budget',      value: contrat.budget,           inline: true  },
+      { name: '⏱️ Délai',       value: contrat.delai,            inline: true  },
+      { name: '📝 Description', value: contrat.description,      inline: false },
+    )
+    .setFooter({ text: `HEO Studio • Système de contrats v2 — Étape : ${contrat.annule ? '🛑 Annulé' : etapeLabel}` })
+    .setTimestamp();
+
+  if (contrat.devIds && contrat.devIds.length > 0) {
+    embed.addFields({ name: '🛠️ Développeur(s)', value: contrat.devIds.map(id => `<@${id}>`).join(', '), inline: false });
+  }
+  if (contrat.secretaireId) {
+    embed.addFields({ name: '📋 Secrétaire', value: `<@${contrat.secretaireId}>`, inline: true });
+  }
+
+  return embed;
+}
+
+// Envoie un message dans les deux tickets (client + dev) — ignore si inexistant
 async function sendToBothTickets(guild, contrat, content, embedData = null) {
   const channels = [contrat.clientTicketId, contrat.devTicketId].filter(Boolean);
   for (const chId of channels) {
     const ch = guild.channels.cache.get(chId);
     if (!ch) continue;
     if (embedData) {
-      await ch.send({ content, embeds: [new EmbedBuilder().setColor(embedData.color).setDescription(embedData.desc)] }).catch(() => {});
-    } else {
+      await ch.send({
+        content,
+        embeds: [new EmbedBuilder().setColor(embedData.color).setDescription(embedData.desc)],
+      }).catch(() => {});
+    } else if (content) {
       await ch.send(content).catch(() => {});
     }
   }
@@ -171,39 +212,50 @@ async function sendToBothTickets(guild, contrat, content, embedData = null) {
 
 // Construit les boutons du ticket client selon l'étape
 function buildClientTicketRow(etape, annule = false) {
-  const rows = [];
-
   if (annule) {
-    rows.push(new ActionRowBuilder().addComponents(
+    return [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('nc_desannuler').setLabel('↩️ Désannuler').setStyle(ButtonStyle.Primary),
-    ));
-    return rows;
+    )];
   }
 
-  const nextBtn   = new ButtonBuilder().setCustomId('nc_next').setStyle(ButtonStyle.Primary);
-  const backBtn   = new ButtonBuilder().setCustomId('nc_back').setLabel('🔙 Retour').setStyle(ButtonStyle.Secondary).setDisabled(etape <= 0);
-  const cancelBtn = new ButtonBuilder().setCustomId('nc_annuler').setLabel('🛑 Annuler').setStyle(ButtonStyle.Danger);
-
   const nextLabels = [
-    '➡️ Dev choisi — créer ticket dev',
-    '✅ 1er paiement reçu',
-    '✅ Travail terminé — 2ème paiement',
-    '✅ 2ème paiement reçu',
-    '✅ Dev payé',
-    null,
+    '➡️ Dev choisi — créer ticket dev',   // 0
+    '✅ 1er paiement reçu',                // 1
+    '✅ Travail terminé — 2ème paiement',   // 2
+    '✅ 2ème paiement reçu',               // 3
+    null,                                   // 4 (bouton dans ticket dev)
+    null,                                   // 5 (terminé)
   ];
 
-  if (nextLabels[etape]) {
-    nextBtn.setLabel(nextLabels[etape]);
+  const isFirst   = etape <= 0;
+  const isLast    = etape >= 4; // étape 4+ : plus de next côté client
+  const nextLabel = nextLabels[etape];
+
+  const backBtn   = new ButtonBuilder()
+    .setCustomId('nc_back')
+    .setLabel('🔙 Retour')
+    .setStyle(ButtonStyle.Secondary)
+    .setDisabled(isFirst);
+
+  const nextBtn = new ButtonBuilder()
+    .setCustomId('nc_next')
+    .setStyle(ButtonStyle.Primary);
+
+  if (nextLabel) {
+    nextBtn.setLabel(nextLabel);
   } else {
     nextBtn.setLabel('✅ Terminé').setDisabled(true);
   }
 
-  rows.push(new ActionRowBuilder().addComponents(backBtn, nextBtn, cancelBtn));
-  return rows;
+  const cancelBtn = new ButtonBuilder()
+    .setCustomId('nc_annuler')
+    .setLabel('🛑 Annuler')
+    .setStyle(ButtonStyle.Danger);
+
+  return [new ActionRowBuilder().addComponents(backBtn, nextBtn, cancelBtn)];
 }
 
-// Construit les boutons du ticket dev (bouton "dev payé")
+// Construit les boutons du ticket dev (bouton "dev payé" à l'étape 4)
 function buildDevTicketRow(etape) {
   if (etape === 4) {
     return [new ActionRowBuilder().addComponents(
@@ -213,9 +265,7 @@ function buildDevTicketRow(etape) {
   return [];
 }
 
-// ── Helper : ouvre le modal d'assignation dev ─────────────────────────────────
-// FIX BUG 1 & 2 : le modal DOIT être ouvert directement depuis l'interaction,
-// jamais depuis une fonction secondaire appelée après deferUpdate/deferReply.
+// ── Ouvre le modal d'assignation dev ─────────────────────────────────────────
 async function openModalDevs(interaction, categoryId) {
   pendingNewDev.set(interaction.user.id, { categoryId });
   const modal = new ModalBuilder().setCustomId('nc_modal_devs').setTitle('👥 Assigner un développeur');
@@ -240,6 +290,37 @@ async function openModalDevs(interaction, categoryId) {
   await interaction.showModal(modal);
 }
 
+// ── Mise à jour du message principal du ticket client ─────────────────────────
+// FIX : on stocke l'ID du message dans contrat.clientMainMessageId pour éviter
+// de chercher dans l'historique (risque de rater le bon message).
+async function updateClientMainMessage(guild, contrat) {
+  const clientCh = guild.channels.cache.get(contrat.clientTicketId);
+  if (!clientCh || !contrat.clientMainMessageId) return;
+
+  try {
+    const msg = await clientCh.messages.fetch(contrat.clientMainMessageId);
+    if (!msg) return;
+
+    const securityEmbed = new EmbedBuilder()
+      .setColor(0xED4245)
+      .setTitle('⚠️ Avertissement sécurité')
+      .setDescription(
+        '🔒 **Jamais** un secrétaire ne te demandera de le payer **directement**.\n' +
+        'Tous les paiements passent exclusivement par :\n' +
+        '• Le **compte PayPal officiel HEO Studio**\n' +
+        '• Le **groupe officiel HEO**\n\n' +
+        'Si un secrétaire te demande un paiement direct ou tout comportement suspect, ping immédiatement <@&' + CONFIG.OWNER_ROLE_ID + '> ou le rôle `🚨 • Urgence`.'
+      );
+
+    await msg.edit({
+      embeds: [buildClientEmbed(contrat), securityEmbed],
+      components: buildClientTicketRow(contrat.etape, contrat.annule),
+    }).catch(() => {});
+  } catch {
+    // Message introuvable, on ignore
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 
 client.once('ready', async () => {
@@ -250,14 +331,12 @@ client.once('ready', async () => {
 // ─── SLASH COMMANDS ───────────────────────────────────────────────────────────
 async function registerSlashCommands() {
   const commands = [
-    // Ancien système
     new SlashCommandBuilder().setName('contrats').setDescription('Liste tous les contrats en cours (ancien système)').toJSON(),
     new SlashCommandBuilder().setName('shop').setDescription('Publier un nouvel asset dans la boutique (admin uniquement)').toJSON(),
     new SlashCommandBuilder()
       .setName('modif').setDescription('Modifier un asset existant dans la boutique (admin uniquement)')
       .addStringOption(opt => opt.setName('message_id').setDescription('ID du message de l\'asset à modifier').setRequired(true))
       .toJSON(),
-    // Nouveau système
     new SlashCommandBuilder()
       .setName('next')
       .setDescription('Passe à l\'étape suivante du contrat (équivalent bouton ➡️)')
@@ -450,13 +529,13 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'contrats') {
       await interaction.deferReply({ ephemeral: false });
-      const guild = interaction.guild;
+      const guild   = interaction.guild;
       const tickets = [];
       for (const [channelId, info] of ticketInfos.entries()) {
         const channel = guild.channels.cache.get(channelId);
         if (!channel) continue;
         const etapeIndex = ticketEtapes.get(channelId) ?? 0;
-        const etape = CONFIG.ETAPES[etapeIndex];
+        const etape      = CONFIG.ETAPES[etapeIndex];
         tickets.push(`${etape.label} — **${info.nom}** — <@${info.clientId}> — ${channel}`);
       }
       if (tickets.length === 0) { await interaction.editReply({ content: '📭 Aucun contrat en cours.' }); return; }
@@ -504,9 +583,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // ── /next (nouveau système) ─────────────────────────────────────────────────
-    // FIX BUG 2 & 3 : étape 0 → on ouvre le modal directement (showModal en réponse directe)
-    // Pour les autres étapes → deferReply puis handleNext
+    // ── /next (nouveau système) ────────────────────────────────────────────────
     if (interaction.commandName === 'next') {
       if (!canSecretaire(interaction.member)) {
         await interaction.reply({ content: '❌ Réservé au secrétaire / owner.', ephemeral: true }); return;
@@ -515,7 +592,6 @@ client.on('interactionCreate', async (interaction) => {
       if (!contrat) { await interaction.reply({ content: '❌ Ce salon n\'est pas lié à un contrat actif.', ephemeral: true }); return; }
       if (contrat.annule) { await interaction.reply({ content: '❌ Ce contrat est annulé. Désannule-le d\'abord.', ephemeral: true }); return; }
 
-      // Étape 0 : showModal AVANT tout defer
       if (contrat.etape === 0) {
         await openModalDevs(interaction, contrat.categoryId);
         return;
@@ -527,7 +603,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // ── /back (nouveau système) ─────────────────────────────────────────────────
+    // ── /back (nouveau système) ────────────────────────────────────────────────
     if (interaction.commandName === 'back') {
       if (!canSecretaire(interaction.member)) {
         await interaction.reply({ content: '❌ Réservé au secrétaire / owner.', ephemeral: true }); return;
@@ -592,58 +668,52 @@ client.on('interactionCreate', async (interaction) => {
       ],
     });
 
+    // FIX : contrat créé AVANT d'envoyer le message pour pouvoir passer le bon objet à buildClientEmbed
     const contratData = {
-      categoryId:           category.id,
+      categoryId:            category.id,
       nom,
       budget,
       delai,
       description,
-      clientId:             user.id,
-      secretaireId:         null,
-      devIds:               [],
-      etape:                0,
-      annule:               false,
-      etapeAvantAnnul:      null,
-      clientTicketId:       clientTicket.id,
-      devTicketId:          null,
+      clientId:              user.id,
+      secretaireId:          null,
+      devIds:                [],
+      etape:                 0,
+      annule:                false,
+      etapeAvantAnnul:       null,
+      clientTicketId:        clientTicket.id,
+      devTicketId:           null,
       paySecretaireTicketId: null,
+      clientMainMessageId:   null, // sera rempli après l'envoi
     };
     newContrats.set(category.id, contratData);
 
-    await clientTicket.send({
+    const securityEmbed = new EmbedBuilder()
+      .setColor(0xED4245)
+      .setTitle('⚠️ Avertissement sécurité')
+      .setDescription(
+        '🔒 **Jamais** un secrétaire ne te demandera de le payer **directement**.\n' +
+        'Tous les paiements passent exclusivement par :\n' +
+        '• Le **compte PayPal officiel HEO Studio**\n' +
+        '• Le **groupe officiel HEO**\n\n' +
+        'Si un secrétaire te demande un paiement direct ou tout comportement suspect, ping immédiatement <@&' + CONFIG.OWNER_ROLE_ID + '> ou le rôle `🚨 • Urgence`.'
+      );
+
+    // FIX : on envoie et on stocke l'ID du message principal
+    const mainMsg = await clientTicket.send({
       content: `👋 <@${user.id}> | <@&${CONFIG.SECRETAIRE_ROLE_ID}>`,
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`📋 Contrat — ${nom}`)
-          .setColor(0xF5C542)
-          .addFields(
-            { name: '👤 Client',      value: `<@${user.id}>`, inline: true  },
-            { name: '💰 Budget',      value: budget,           inline: true  },
-            { name: '⏱️ Délai',       value: delai,            inline: true  },
-            { name: '📝 Description', value: description,       inline: false },
-          )
-          .setFooter({ text: 'HEO Studio • Système de contrats v2 — Étape : 🟡 Négociation' })
-          .setTimestamp(),
-        new EmbedBuilder()
-          .setColor(0xED4245)
-          .setTitle('⚠️ Avertissement sécurité')
-          .setDescription(
-            '🔒 **Jamais** un secrétaire ne te demandera de le payer **directement**.\n' +
-            'Tous les paiements passent exclusivement par :\n' +
-            '• Le **compte PayPal officiel HEO Studio**\n' +
-            '• Le **groupe officiel HEO**\n\n' +
-            'Si un secrétaire te demande un paiement direct ou tout comportement suspect, ping immédiatement <@&' + CONFIG.OWNER_ROLE_ID + '> ou le rôle `🚨 • Urgence`.'
-          ),
-      ],
+      embeds: [buildClientEmbed(contratData), securityEmbed],
       components: buildClientTicketRow(0),
     });
+
+    contratData.clientMainMessageId = mainMsg.id;
+    newContrats.set(category.id, contratData);
 
     await interaction.editReply({ content: `✅ Ton contrat a été créé ! Rends-toi dans la catégorie **🟡-${nomSafe}**.` });
     return;
   }
 
   // ── Bouton : ➡️ Next ──────────────────────────────────────────────────────────
-  // FIX BUG 1 : étape 0 → showModal directement, AVANT tout deferUpdate
   if (interaction.isButton() && interaction.customId === 'nc_next') {
     if (!canSecretaire(interaction.member)) {
       await interaction.reply({ content: '❌ Réservé au secrétaire / owner.', ephemeral: true }); return;
@@ -652,7 +722,7 @@ client.on('interactionCreate', async (interaction) => {
     if (!contrat) { await interaction.reply({ content: '❌ Contrat introuvable.', ephemeral: true }); return; }
     if (contrat.annule) { await interaction.reply({ content: '❌ Ce contrat est annulé. Désannule-le d\'abord.', ephemeral: true }); return; }
 
-    // Étape 0 : ouvrir le modal directement (pas de deferUpdate avant !)
+    // Étape 0 → modal directement (pas de deferUpdate avant !)
     if (contrat.etape === 0) {
       await openModalDevs(interaction, contrat.categoryId);
       return;
@@ -693,13 +763,16 @@ client.on('interactionCreate', async (interaction) => {
     const guild = interaction.guild;
     await renameCategoryEmoji(guild, contrat.categoryId, contrat.etape, true);
 
+    // Renomme tous les salons avec le préfixe 🛑
     for (const chId of [contrat.clientTicketId, contrat.devTicketId, contrat.paySecretaireTicketId].filter(Boolean)) {
       const ch = guild.channels.cache.get(chId);
       if (ch) await renameChannelPrefix(ch, '🛑').catch(() => {});
     }
 
     await sendToBothTickets(guild, contrat, '', { color: 0xED4245, desc: `🛑 Contrat **annulé** par <@${interaction.user.id}>` });
-    await refreshClientTicketButtons(guild, contrat);
+
+    // FIX : met à jour l'embed principal ET les boutons
+    await updateClientMainMessage(guild, contrat);
     return;
   }
 
@@ -722,17 +795,22 @@ client.on('interactionCreate', async (interaction) => {
     const guild = interaction.guild;
     await renameCategoryEmoji(guild, contrat.categoryId, etapeRetour, false);
 
-    for (const chId of [contrat.clientTicketId, contrat.devTicketId, contrat.paySecretaireTicketId].filter(Boolean)) {
+    // FIX : retire le préfixe 🛑 et remet le bon préfixe selon le type de salon
+    const channelPrefixes = {
+      [contrat.clientTicketId]:        '💼',
+      [contrat.devTicketId]:           '🛠️',
+      [contrat.paySecretaireTicketId]: '📍💳',
+    };
+    for (const [chId, prefix] of Object.entries(channelPrefixes)) {
+      if (!chId) continue;
       const ch = guild.channels.cache.get(chId);
-      if (ch) {
-        // Retire le préfixe 🛑 et remet le bon préfixe selon l'étape
-        const nomSans = stripChannelPrefix(ch.name);
-        await ch.setName(nomSans).catch(() => {});
-      }
+      if (ch) await renameChannelPrefix(ch, prefix).catch(() => {});
     }
 
     await sendToBothTickets(guild, contrat, '', { color: 0x57F287, desc: `↩️ Contrat **désannulé** par <@${interaction.user.id}> — retour à l'étape **${etapeRetour + 1}/6**` });
-    await refreshClientTicketButtons(guild, contrat);
+
+    // FIX : met à jour l'embed principal ET les boutons
+    await updateClientMainMessage(guild, contrat);
     return;
   }
 
@@ -811,6 +889,7 @@ client.on('interactionCreate', async (interaction) => {
         .setTimestamp()],
     });
 
+    // FIX : notifie dans le ticket client ET met à jour l'embed principal
     const clientCh = guild.channels.cache.get(contrat.clientTicketId);
     if (clientCh) {
       await clientCh.send({
@@ -818,12 +897,14 @@ client.on('interactionCreate', async (interaction) => {
           .setColor(0xFF8C00)
           .setDescription('✅ Un développeur a été sélectionné pour ton projet.\n⏳ **En attente du 1er paiement.**')],
       });
-      await refreshClientTicketButtons(guild, contrat);
     }
 
     await devTicket.send({
       embeds: [new EmbedBuilder().setColor(0xFF8C00).setDescription('⏳ **Attente du 1er paiement client.**')],
     });
+
+    // FIX : met à jour l'embed principal du ticket client avec les nouvelles infos (dev, étape)
+    await updateClientMainMessage(guild, contrat);
 
     await interaction.editReply({ content: `✅ Ticket dev créé : ${devTicket} ! Dev(s) assignés : ${devsStr}${warnNotFound}` });
     return;
@@ -839,16 +920,19 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferUpdate();
     const guild = interaction.guild;
 
+    // Retire les permissions des devs du ticket dev
     for (const devId of contrat.devIds) {
       const devCh = guild.channels.cache.get(contrat.devTicketId);
       if (devCh) await devCh.permissionOverwrites.delete(devId).catch(() => {});
     }
 
+    // Renomme le ticket dev en ✅
     const devCh = guild.channels.cache.get(contrat.devTicketId);
     if (devCh) await renameChannelPrefix(devCh, '✅').catch(() => {});
 
+    // Crée le ticket de paiement secrétaire
     const payTicket = await guild.channels.create({
-      name: `📍💳-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}`,
+      name: `📍💳-secretaire`,
       type: ChannelType.GuildText,
       parent: contrat.categoryId,
       permissionOverwrites: [
@@ -877,11 +961,15 @@ client.on('interactionCreate', async (interaction) => {
       )],
     });
 
+    // Désactive le bouton "dev payé" dans le ticket dev
     await interaction.message.edit({
       components: [new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('nc_dev_paye').setLabel('✅ Dev payé').setStyle(ButtonStyle.Success).setDisabled(true),
       )],
-    });
+    }).catch(() => {});
+
+    // FIX : met à jour l'embed principal du ticket client
+    await updateClientMainMessage(guild, contrat);
     return;
   }
 
@@ -898,7 +986,7 @@ client.on('interactionCreate', async (interaction) => {
     const payCh = guild.channels.cache.get(contrat.paySecretaireTicketId);
     if (payCh) {
       await payCh.send({
-        embeds: [new EmbedBuilder().setColor(0x57F287).setDescription('✅ **Paiement secrétaire effectué !** Contrat terminé.')],
+        embeds: [new EmbedBuilder().setColor(0x57F287).setDescription('✅ **Paiement secrétaire effectué !** Contrat entièrement terminé. 🎉')],
       });
       await renameChannelPrefix(payCh, '✅').catch(() => {});
     }
@@ -909,7 +997,8 @@ client.on('interactionCreate', async (interaction) => {
       components: [new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('nc_terminer_paiement_sec').setLabel('✅ Terminé').setStyle(ButtonStyle.Success).setDisabled(true),
       )],
-    });
+    }).catch(() => {});
+
     return;
   }
 
@@ -1039,7 +1128,7 @@ client.on('interactionCreate', async (interaction) => {
       if (id === CONFIG.VENDEUR_ROLE_ID) continue;
       await channel.permissionOverwrites.edit(id, { ViewChannel: false, SendMessages: false, ReadMessageHistory: false }).catch(() => {});
     }
-    const newName = `🔒${channel.name.replace(/^🔒/, '')}`;
+    const newName = `🔒-${stripPrefix(channel.name)}`;
     await channel.setName(newName).catch(() => {});
     await interaction.message.edit({
       components: [new ActionRowBuilder().addComponents(
@@ -1674,8 +1763,8 @@ client.on('interactionCreate', async (interaction) => {
 function findContratByChannel(channelId) {
   for (const [, contrat] of newContrats) {
     if (
-      contrat.clientTicketId === channelId ||
-      contrat.devTicketId === channelId ||
+      contrat.clientTicketId        === channelId ||
+      contrat.devTicketId           === channelId ||
       contrat.paySecretaireTicketId === channelId
     ) {
       return contrat;
@@ -1684,21 +1773,10 @@ function findContratByChannel(channelId) {
   return null;
 }
 
-async function refreshClientTicketButtons(guild, contrat) {
-  const clientCh = guild.channels.cache.get(contrat.clientTicketId);
-  if (!clientCh) return;
-  const msgs = await clientCh.messages.fetch({ limit: 30 });
-  const botMsg = msgs.find(m =>
-    m.author.id === client.user.id &&
-    m.components.length > 0 &&
-    m.components[0]?.components?.some(c => c.customId?.startsWith('nc_'))
-  );
-  if (botMsg) {
-    await botMsg.edit({ components: buildClientTicketRow(contrat.etape, contrat.annule) }).catch(() => {});
-  }
-}
-
-// FIX BUG 1 & 2 : handleNext ne gère plus l'étape 0 (modal ouvert en amont directement)
+// ── handleNext ────────────────────────────────────────────────────────────────
+// FIX : l'étape 0 est gérée en amont (modal dev), on commence donc à l'étape 1+.
+// FIX : l'embed principal du ticket client est mis à jour à chaque avancement.
+// FIX : les messages de log sont envoyés UNIQUEMENT dans les salons existants.
 async function handleNext(guild, contrat, user, channel) {
   if (contrat.etape >= 5) {
     await channel.send({ embeds: [new EmbedBuilder().setColor(0x57F287).setDescription('✅ Ce contrat est déjà à l\'étape finale.')] });
@@ -1709,6 +1787,7 @@ async function handleNext(guild, contrat, user, channel) {
   newContrats.set(contrat.categoryId, contrat);
   await renameCategoryEmoji(guild, contrat.categoryId, contrat.etape);
 
+  // Messages de progression (envoyés dans les deux tickets si existants)
   const messages = {
     1: { color: 0xFF8C00, desc: `1️⃣💳 **En attente du 1er paiement.**\nPar : <@${user.id}>` },
     2: { color: 0x5865F2, desc: `✅ 1er paiement reçu — 🛠️ **Développement en cours.**\nPar : <@${user.id}>` },
@@ -1719,6 +1798,7 @@ async function handleNext(guild, contrat, user, channel) {
 
   await sendToBothTickets(guild, contrat, '', messages[contrat.etape] ?? { color: 0x57F287, desc: `Étape ${contrat.etape}` });
 
+  // Étape 4 : bouton "dev payé" dans le ticket dev + renomme ticket client en ✅
   if (contrat.etape === 4) {
     const devCh = guild.channels.cache.get(contrat.devTicketId);
     if (devCh) {
@@ -1728,13 +1808,17 @@ async function handleNext(guild, contrat, user, channel) {
         components: buildDevTicketRow(4),
       });
     }
+    // FIX : préfixe propre sans accumulation
     const clientCh = guild.channels.cache.get(contrat.clientTicketId);
     if (clientCh) await renameChannelPrefix(clientCh, '✅').catch(() => {});
   }
 
-  await refreshClientTicketButtons(guild, contrat);
+  // FIX : met à jour l'embed principal du ticket client (couleur + étape + boutons)
+  await updateClientMainMessage(guild, contrat);
 }
 
+// ── handleBack ────────────────────────────────────────────────────────────────
+// FIX : même logique de mise à jour de l'embed principal.
 async function handleBack(guild, contrat, user, channel) {
   if (contrat.etape <= 0) {
     await channel.send({ embeds: [new EmbedBuilder().setColor(0x99AAB5).setDescription('⚠️ Déjà à la première étape.')] });
@@ -1747,8 +1831,9 @@ async function handleBack(guild, contrat, user, channel) {
   if (contrat.etape === 1 && contrat.devTicketId) {
     const devCh = guild.channels.cache.get(contrat.devTicketId);
     if (devCh) await devCh.delete().catch(() => {});
-    contrat.devTicketId = null;
-    contrat.devIds      = [];
+    contrat.devTicketId  = null;
+    contrat.devIds       = [];
+    contrat.secretaireId = null;
   }
 
   // Retour étape 5 → 4 : supprime le ticket paiement secrétaire
@@ -1758,7 +1843,7 @@ async function handleBack(guild, contrat, user, channel) {
     contrat.paySecretaireTicketId = null;
   }
 
-  // FIX BUG 5 : retour étape 4 → 3 : retire le ✅ du ticket client ET remet le ✅-dev en 🛠️-dev
+  // Retour étape 4 → 3 : remet le préfixe 💼 sur le ticket client et 🛠️ sur le ticket dev
   if (contrat.etape === 4) {
     const clientCh = guild.channels.cache.get(contrat.clientTicketId);
     if (clientCh) await renameChannelPrefix(clientCh, '💼').catch(() => {});
@@ -1771,7 +1856,9 @@ async function handleBack(guild, contrat, user, channel) {
   await renameCategoryEmoji(guild, contrat.categoryId, etapePrecedente);
 
   await sendToBothTickets(guild, contrat, '', { color: 0x99AAB5, desc: `🔙 Retour à l'étape **${etapePrecedente + 1}/6** par <@${user.id}>` });
-  await refreshClientTicketButtons(guild, contrat);
+
+  // FIX : met à jour l'embed principal du ticket client
+  await updateClientMainMessage(guild, contrat);
 }
 
 client.login(CONFIG.TOKEN);
