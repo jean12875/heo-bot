@@ -1763,3 +1763,4 @@ async function handleBack(guild, contrat, user, channel) {
 }
 
 client.login(CONFIG.TOKEN);
+ 
