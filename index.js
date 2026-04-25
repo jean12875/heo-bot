@@ -271,9 +271,21 @@ client.on('interactionCreate', async interaction => {
   //  COMMANDE /resetscores
   // ════════════════════════════════════════
   if (interaction.isChatInputCommand() && interaction.commandName === 'resetscores') {
+    // Vider les scores
     for (const key of Object.keys(scores)) delete scores[key];
+
+    // Réenregistrer tous les devs à 0
+    const members = await interaction.guild.members.fetch().catch(() => null);
+    if (members) {
+      for (const [id, member] of members) {
+        if (member.roles.cache.has(DEV_ROLE_ID)) {
+          scores[id] = { username: member.user.username, score: 0 };
+        }
+      }
+    }
+
     await updateScoreBoard(interaction.guild);
-    return interaction.reply({ content: '✅ Tous les scores ont été réinitialisés.', ephemeral: true });
+    return interaction.reply({ content: '✅ Tous les scores ont été remis à 0.', ephemeral: true });
   }
 
   // ════════════════════════════════════════
